@@ -38,30 +38,36 @@ the systems that own the documents and makes the graph reflect them. The other
 reads it: a search, started by an agent's question, gathers evidence from it.
 
 ```mermaid
-flowchart LR
-    agent(["AI agent"]):::outside
-    sources["Source systems<br/>GitHub today"]:::outside
-    local["Local models<br/>summaries,<br/>embeddings"]:::local
-    mcp["MCP server<br/>grafsol-mcp"]:::code
-    syncer["Sync engine<br/>ingest.Syncer"]:::code
-    engine["Search engine<br/>retrieval.Engine"]:::code
-    store[("The graph<br/>Postgres,<br/>pgvector")]:::data
-    jev("Jev<br/>the judge"):::paid
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        agent(["AI agent"]):::outside
+        sources["Source systems<br/>GitHub today"]:::outside
+        local["Local models<br/>summaries,<br/>embeddings"]:::local
+        mcp["MCP server<br/>grafsol-mcp"]:::code
+        syncer["Sync engine<br/>ingest.Syncer"]:::code
+        engine["Search engine<br/>retrieval.Engine"]:::code
+        store[("The graph<br/>Postgres,<br/>pgvector")]:::data
+        jev("Jev<br/>the judge"):::paid
 
-    agent -- "questions" --> mcp
-    mcp -- "searches" --> engine
-    engine -- "reads" --> store
-    engine -. "asks" .-> jev
-    sources -- "changes" --> syncer
-    syncer -- "writes" --> store
-    local <-.-> engine
-    local <-.-> syncer
+        agent -- "questions" --> mcp
+        mcp -- "searches" --> engine
+        engine -- "reads" --> store
+        sources -- "changes" --> syncer
+        syncer -- "writes" --> store
+        local <-.-> engine
+        local <-.-> syncer
+        jev <-. "judges" .-> engine
+    end
+
+    %% GitHub lays its zoom buttons over the bottom right corner, which this layout leaves empty.
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
     classDef data fill:#dcfce7,stroke:#22c55e,color:#0f172a
     classDef local fill:#fef3c7,stroke:#f59e0b,color:#0f172a
     classDef paid fill:#fae8ff,stroke:#c026d3,color:#0f172a
+    style all fill:none,stroke:none
 ```
 
 The dotted lines are calls to models. The sync engine has each document
@@ -99,21 +105,29 @@ A vertex is a document or a topic. An edge runs from one vertex to another and
 has a kind. This made-up example shows all four:
 
 ```mermaid
-flowchart LR
-    pr["Pull request 9<br/>Cache prices"]:::doc
-    sub["Issue 12<br/>Add a load test"]:::doc
-    issue["Issue 7<br/>Slow checkout"]:::doc
-    checkout(["Topic<br/>checkout"]):::topic
-    perf(["Topic<br/>performance"]):::topic
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        pr["Pull request 9<br/>Cache prices"]:::doc
+        sub["Issue 12<br/>Add a load test"]:::doc
+        issue["Issue 7<br/>Slow checkout"]:::doc
+        checkout(["Topic<br/>checkout"]):::topic
+        perf(["Topic<br/>performance"]):::topic
 
-    pr -- "links_to<br/>fixes the slow query in" --> issue
-    sub -- "child_of<br/>sub-issue of" --> issue
-    issue -- "in_topic" --> checkout
-    issue -- "tagged_with" --> perf
-    pr -- "tagged_with" --> perf
+        pr -- "links_to<br/>fixes the slow query in" --> issue
+        sub -- "child_of<br/>sub-issue of" --> issue
+        issue -- "in_topic" --> checkout
+        issue -- "tagged_with" --> perf
+        pr -- "tagged_with" --> perf
+    end
+
+    %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
+    all ~~~ corner["&nbsp;<br/>&nbsp;<br/>&nbsp;"]
 
     classDef doc fill:#dcfce7,stroke:#22c55e,color:#0f172a
     classDef topic fill:#ccfbf1,stroke:#14b8a6,color:#0f172a
+    style all fill:none,stroke:none
+    style corner fill:none,stroke:none
 ```
 
 | Edge | Runs | Means |
@@ -193,26 +207,34 @@ whether a URL is one of its own, so a link can cross from one system into
 another. Then the ledger says whether the change is news:
 
 ```mermaid
-flowchart LR
-    links["Resolve links<br/>URLs become<br/>edges"]:::code
-    news["Ask the ledger:<br/>is it news?"]:::data
-    old(["Nothing<br/>is written"]):::outside
-    enrich["Summarise,<br/>then embed"]:::local
-    lock["Lock it, ask<br/>the ledger<br/>again"]:::code
-    write["Write edges,<br/>topics and the<br/>document; the<br/>ledger last"]:::data
-    remove["Remove it,<br/>leave a<br/>tombstone"]:::data
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        links["Resolve links<br/>URLs become<br/>edges"]:::code
+        news["Ask the ledger:<br/>is it news?"]:::data
+        old(["Nothing<br/>is written"]):::outside
+        enrich["Summarise,<br/>then embed"]:::local
+        lock["Lock it, ask<br/>the ledger<br/>again"]:::code
+        write["Write edges,<br/>topics and the<br/>document; the<br/>ledger last"]:::data
+        remove["Remove it,<br/>leave a<br/>tombstone"]:::data
 
-    links --> news
-    news -- "old news" --> old
-    news -- "new" --> enrich --> lock
-    news -- "gone" --> lock
-    lock -- "new" --> write
-    lock -- "gone" --> remove
+        links --> news
+        news -- "old news" --> old
+        news -- "new" --> enrich --> lock
+        news -- "gone" --> lock
+        lock -- "new" --> write
+        lock -- "gone" --> remove
+    end
+
+    %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
+    all ~~~ corner["&nbsp;<br/>&nbsp;<br/>&nbsp;"]
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
     classDef data fill:#dcfce7,stroke:#22c55e,color:#0f172a
     classDef local fill:#fef3c7,stroke:#f59e0b,color:#0f172a
+    style all fill:none,stroke:none
+    style corner fill:none,stroke:none
 ```
 
 The models run before the lock is taken, because they can take seconds. The
@@ -259,24 +281,32 @@ goes round a loop, one call to the judge each time, until one of three things
 ends it.
 
 ```mermaid
-flowchart LR
-    seed["Embed the<br/>question, start<br/>at the 8 nearest"]:::code
-    judge("Ask the judge<br/>rate new leads,<br/>weigh evidence"):::paid
-    follow["Follow the 3<br/>best leads at<br/>0.25 or more"]:::code
-    sufficient(["sufficient"]):::outside
-    exhausted(["exhausted"]):::outside
-    stopped(["stopped"]):::outside
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        seed["Embed the<br/>question, start<br/>at the 8 nearest"]:::code
+        judge("Ask the judge<br/>rate new leads,<br/>weigh evidence"):::paid
+        follow["Follow the 3<br/>best leads at<br/>0.25 or more"]:::code
+        sufficient(["sufficient"]):::outside
+        exhausted(["exhausted"]):::outside
+        stopped(["stopped"]):::outside
 
-    seed --> judge
-    judge -- "enough" --> sufficient
-    judge -- "not yet" --> follow
-    follow -- "new leads, and<br/>evidence at 0.75" --> judge
-    follow -- "none left" --> exhausted
-    follow -- "a limit" --> stopped
+        seed --> judge
+        judge -- "enough" --> sufficient
+        judge -- "not yet" --> follow
+        follow -- "new leads, and<br/>evidence at 0.75" --> judge
+        follow -- "none left" --> exhausted
+        follow -- "a limit" --> stopped
+    end
+
+    %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
+    all ~~~ corner["&nbsp;<br/>&nbsp;<br/>&nbsp;"]
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
     classDef paid fill:#fae8ff,stroke:#c026d3,color:#0f172a
+    style all fill:none,stroke:none
+    style corner fill:none,stroke:none
 ```
 
 A lead is a vertex the search could visit next, and how it would get there. The
@@ -308,7 +338,7 @@ task has several parts asks all its questions in one call. They are embedded
 together and searched side by side:
 
 ```mermaid
-%%{init: {"sequence": {"width": 110, "actorMargin": 30}}}%%
+%%{init: {"sequence": {"width": 110, "actorMargin": 30, "mirrorActors": false}}}%%
 sequenceDiagram
     autonumber
     participant A as AI agent
@@ -410,22 +440,30 @@ graph that state it. Thirteen questions are held back, to confirm that a change
 made on the strength of the others was not fitted to them.
 
 ```mermaid
-flowchart LR
-    set[("The test set<br/>a frozen graph<br/>and questions<br/>with answers")]:::data
-    record["record -live<br/>the only step<br/>that costs"]:::code
-    jev("Jev"):::paid
-    tape[("The tape<br/>every answer,<br/>filed under<br/>its question")]:::data
-    report["report<br/>replays the<br/>tape, free"]:::code
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        set[("The test set<br/>a frozen graph<br/>and questions<br/>with answers")]:::data
+        record["record -live<br/>the only step<br/>that costs"]:::code
+        jev("Jev"):::paid
+        tape[("The tape<br/>every answer,<br/>filed under<br/>its question")]:::data
+        report["report<br/>replays the<br/>tape, free"]:::code
 
-    set --> record
-    record <-- "what the tape lacks" --> jev
-    record -- "answers" --> tape
-    set --> report
-    tape --> report
+        set --> record
+        record <-- "what the tape lacks" --> jev
+        record -- "answers" --> tape
+        set --> report
+        tape --> report
+    end
+
+    %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
+    all ~~~ corner["&nbsp;<br/>&nbsp;<br/>&nbsp;"]
 
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
     classDef data fill:#dcfce7,stroke:#22c55e,color:#0f172a
     classDef paid fill:#fae8ff,stroke:#c026d3,color:#0f172a
+    style all fill:none,stroke:none
+    style corner fill:none,stroke:none
 ```
 
 Anything asked again in the same words is answered from the tape. So money
