@@ -1,0 +1,6 @@
+{
+  "model": "Qwen/Qwen3-4B-Instruct-2507",
+  "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+  "summary": "Checkout p95 latency rose from 180 ms to 410 ms after release 2024.03.12; bisecting points at #812, which removed the product cache.",
+  "parts": 1
+}

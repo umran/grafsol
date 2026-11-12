@@ -1,0 +1,4 @@
+{
+  "title": "Checkout latency doubled",
+  "text": "After release 2024.03.12 the checkout endpoint's p95 latency went from 180 ms to 410 ms. Bisecting points at #812, which removed the product cache."
+}

@@ -1,0 +1,1040 @@
+{
+  "context": "Questions about two public Go libraries whose GitHub issues and pull requests are in the graph: jackc/puddle, a resource pool, and tidwall/btree, a B-tree.",
+  "questions": [
+    {
+      "id": "puddle-createresource-deadlock",
+      "question": "Why could Pool.CreateResource deadlock, and has it been fixed?",
+      "context": "Issues and pull requests of jackc/puddle, a resource pool library for Go.",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "It deadlocks when the pool is closed while a resource is being acquired, because the lock is not released after the closed check.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#8",
+              "quote": "the lock on `p.cond.L` is not released after checking `p.closed` and returning `ErrClosedPool`"
+            }
+          ]
+        },
+        {
+          "fact": "A pull request fixes the deadlock.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#9",
+              "quote": "Fixes a deadlock in Pool.CreateResource"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#2",
+        "doc:github:jackc/puddle#4"
+      ],
+      "note": "Run by hand on 2026-11-12, with this context."
+    },
+    {
+      "id": "puddle-atomic-operations",
+      "question": "What problem was the pull request that uses atomic operations to avoid locking written to solve?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The pull request was written for issue 17.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#18",
+              "quote": "related to GitHub issue https://github.com/jackc/puddle/issues/17"
+            },
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#18",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#17"
+              },
+              "quote": "For this issue"
+            }
+          ]
+        },
+        {
+          "fact": "Acquire did not return at once when its context was done, because it took a lock first.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#17",
+              "quote": "does not return immediately when ctx.Done() is called due to a lock attempt before returning"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#9",
+        "doc:github:jackc/puddle#13",
+        "doc:github:jackc/puddle#2"
+      ],
+      "note": "Run by hand on 2026-11-12."
+    },
+    {
+      "id": "puddle-yield-fix",
+      "question": "A released resource was sitting unused while the goroutine that released it kept running. What was done about it?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "runtime.Gosched() is called after the semaphore is released, when a goroutine is blocked in Acquire.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#47",
+              "quote": "adding `runtime.Gosched()` after semaphore release in `Release`, `Destroy`, and `Hijack` functions, only when a goroutine is blocked in `Acquire`"
+            }
+          ]
+        },
+        {
+          "fact": "The problem: a released resource stays unusable while the releasing goroutine keeps running.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#46",
+              "quote": "a released resource stays unusable for as long as the releasing goroutine keeps running"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#24"
+      ]
+    },
+    {
+      "id": "puddle-backport",
+      "question": "What does the change that was backported to the v1 branch do to Acquire?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The backport carries pull requests #21 and #22.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#23",
+              "quote": "Backports pull requests #21 and #22 to the v1 branch"
+            },
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#23",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#21"
+              },
+              "quote": "Backporting #21 and #22"
+            }
+          ]
+        },
+        {
+          "fact": "Acquire creates resources in the background when its context is cancelled.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#21",
+              "quote": "Modifies Acquire to create resources asynchronously when the context is cancelled"
+            }
+          ]
+        },
+        {
+          "fact": "A fix for a race in that background creation came with it.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#22",
+              "quote": "Fix race with background Acquire creation"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#48"
+      ]
+    },
+    {
+      "id": "puddle-docker-hang-earlier-report",
+      "question": "The report of an application hanging in Docker says the problem had been described before. What did that earlier report see?",
+      "kind": "link",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "The Docker report points to issue #25.",
+          "stated": [
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#37",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#25"
+              },
+              "quote": "As described in issue #25"
+            }
+          ]
+        },
+        {
+          "fact": "A pgxpool program hung on db.Close(), at p.destructWG.Wait(), when it was interrupted.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#25",
+              "quote": "hanging on `db.Close()` and specifically on `p.destructWG.Wait()`"
+            }
+          ]
+        },
+        {
+          "fact": "The later report: the application hangs on destructWG.Wait() in a Docker container.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#37",
+              "quote": "Application hangs on `defer p.destructWG.Wait()` when run in a Docker container"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#1",
+        "doc:github:jackc/puddle#48"
+      ],
+      "note": "The tie between the two reports is stated only on the link: the summary of #37 does not mention #25."
+    },
+    {
+      "id": "puddle-nil-context-related",
+      "question": "The fix for Acquire hanging on a nil context names an earlier issue and an earlier pull request as related. What was each of them about?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "It names issue #1 and pull request #12.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#13",
+              "quote": "The problem is linked to issue #1, pull request #12, and this fix"
+            },
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#13",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#1"
+              },
+              "quote": "I think issue #1 is related both to pull request #12 and this one"
+            }
+          ]
+        },
+        {
+          "fact": "Issue #1: the Close() function freezes.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#1",
+              "quote": "The Close() function in pool.go freezes"
+            }
+          ]
+        },
+        {
+          "fact": "Pull request #12 fixes memory leaks.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#12",
+              "quote": "Fixes memory leaks caused by modifying slice lengths without removing elements from the backing array"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#44",
+        "doc:github:jackc/puddle#25"
+      ]
+    },
+    {
+      "id": "puddle-tracing-origin",
+      "question": "Which earlier pull request prompted the work-in-progress tracing experiment, and what does that pull request add?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "It came from reading pull request #30.",
+          "stated": [
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#41",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#30"
+              },
+              "quote": "Was reading #30 and thought the"
+            }
+          ]
+        },
+        {
+          "fact": "#30 adds the ability to set an external observer of acquire duration.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#30",
+              "quote": "Adds the ability to set an arbitrary external acquire duration observer"
+            }
+          ]
+        },
+        {
+          "fact": "The experiment: tracing with tracerSpan.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#41",
+              "quote": "Proposes a WIP on tracing using `tracerSpan`"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#29",
+        "doc:github:jackc/puddle#34"
+      ],
+      "note": "The tie is stated only on the link: the summary of #41 does not mention #30."
+    },
+    {
+      "id": "puddle-semaphore-handoff",
+      "question": "The issue about released resources going unused blames a handoff that an earlier change brought in. Why had that earlier change been made?",
+      "kind": "link",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The handoff came in with pull request #24.",
+          "stated": [
+            {
+              "on": {
+                "from": "doc:github:jackc/puddle#46",
+                "kind": "links_to",
+                "to": "doc:github:jackc/puddle#24"
+              },
+              "quote": "this one is the FIFO handoff it brought in"
+            }
+          ]
+        },
+        {
+          "fact": "#24 replaced the condition variable with a semaphore to fix long Acquire latency under CPU-heavy load and cancellations.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#24",
+              "quote": "to resolve long latency during load tests with CPU-heavy workloads and request cancellations"
+            }
+          ]
+        },
+        {
+          "fact": "The issue: a FIFO handoff leaves a released resource unusable.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#46",
+              "quote": "due to FIFO handoff in `acquireSem` after `Release`"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#47"
+      ],
+      "note": "The tie is stated only on the link: the summary of #46 does not mention #24."
+    },
+    {
+      "id": "puddle-unsafe-replacement",
+      "question": "What from the standard library took the place of the hand-rolled log2, so that the unsafe package could be dropped?",
+      "kind": "link",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "bits.Len64, from math/bits.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#40",
+              "quote": "replacing a custom log2 implementation in `acquireSemAll` with `bits.Len64`"
+            },
+            {
+              "in": "doc:github:jackc/puddle#36",
+              "quote": "replacing `log2Int` in `log.go` with `math/bits.Len64`"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#35"
+      ],
+      "note": "Either document states it: the issue that proposed the change, or the pull request that made it."
+    },
+    {
+      "id": "puddle-createresource-maxsize",
+      "question": "If the pool is already at its maximum size, will CreateResource refuse to add another resource?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "No: CreateResource does not check the maximum size.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#4",
+              "quote": "without checking the maxSize limit"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#33",
+        "doc:github:jackc/puddle#8"
+      ]
+    },
+    {
+      "id": "puddle-tryacquire-blocks",
+      "question": "TryAcquire is meant not to wait. Why did it hold a caller up for seconds when the network was down?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The constructor's DialTimeout blocks for 5 seconds on a failed connection, and TryAcquire is held up with it.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#14",
+              "quote": "DialTimeout blocks for 5 seconds during a failed TCP connection attempt"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#10",
+        "doc:github:jackc/puddle#15"
+      ]
+    },
+    {
+      "id": "puddle-memory-leak-cause",
+      "question": "Closed connections were staying in memory. What in the pool's code kept them there?",
+      "kind": "one",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "Slice lengths were changed without removing the elements from the backing array.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#12",
+              "quote": "modifying slice lengths without removing elements from the backing array"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#1",
+        "doc:github:jackc/puddle#48"
+      ]
+    },
+    {
+      "id": "puddle-nil-context",
+      "question": "What does Acquire do now if it is handed a nil context?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "It panics at once.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#13",
+              "quote": "Panic immediately if nil is passed as the ctx argument in Acquire"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#44",
+        "doc:github:jackc/puddle#45"
+      ]
+    },
+    {
+      "id": "puddle-linkname",
+      "question": "Why did puddle have to find another way to read the clock than importing nanotime from the runtime?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The Go authors locked down the use of linkname.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#35",
+              "quote": "Go authors locked down linkname usage"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#36",
+        "doc:github:jackc/puddle#40"
+      ]
+    },
+    {
+      "id": "puddle-empty-acquire-stat",
+      "question": "What exactly does the EmptyAcquireWaitTime statistic count?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The time an acquisition takes when the pool is empty and has to wait or construct a resource.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#34",
+              "quote": "the time taken for resource acquisition when the pool is empty and must wait or construct a new resource"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#29",
+        "doc:github:jackc/puddle#30"
+      ]
+    },
+    {
+      "id": "puddle-observer-compat",
+      "question": "Would adopting the external acquire-duration observer pull in new dependencies or break existing callers?",
+      "kind": "one",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "It adds no dependencies.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#30",
+              "quote": "No dependencies are added or updated"
+            }
+          ]
+        },
+        {
+          "fact": "It does not break backward compatibility.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#30",
+              "quote": "Changes do not break backward compatibility"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#29",
+        "doc:github:jackc/puddle#34"
+      ]
+    },
+    {
+      "id": "puddle-released-resource-idle",
+      "question": "Under contention, how long does a resource that has just been released go unused, and what does that do to throughput?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "About 1 ms per contended acquire.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#46",
+              "quote": "remains unusable for ~1 ms per contended acquire"
+            }
+          ]
+        },
+        {
+          "fact": "Throughput drops by a third.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#46",
+              "quote": "causing throughput to drop by a third"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#47",
+        "doc:github:jackc/puddle#24"
+      ]
+    },
+    {
+      "id": "btree-prev-true",
+      "question": "What sequence of iterator calls makes IterG.Prev go on returning true past the start of the tree?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "Last, then Next, then Prev beyond the far end.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#46",
+              "quote": "when `Last` is called, followed by `Next`, and then `Prev` is called beyond the far end"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#14",
+        "doc:github:tidwall/btree#15"
+      ]
+    },
+    {
+      "id": "btree-deletehint-ignores",
+      "question": "Does DeleteHint make any use of the hint it is passed?",
+      "kind": "one",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "No: it passes nil in place of the hint, so it behaves like Delete.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#47",
+              "quote": "passing nil instead of the provided hint"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#43",
+        "doc:github:tidwall/btree#7"
+      ]
+    },
+    {
+      "id": "btree-bsearch-overflow",
+      "question": "Where in the tree's binary search could an integer overflow, and how does Go's own library avoid it?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "The midpoint is computed as (low + high) / 2.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#48",
+              "quote": "risks integer overflow due to (low + high) / 2"
+            }
+          ]
+        },
+        {
+          "fact": "The standard library computes int(uint(i+j) >> 1).",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#48",
+              "quote": "int(uint(i+j) >> 1)"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#44"
+      ]
+    },
+    {
+      "id": "btree-getat-32bit",
+      "question": "Why might the index parameter of Set.GetAt be too small on some machines?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "On 32-bit machines an int stops at 2147483647.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#44",
+              "quote": "on 32-bit machines, `int` maxes out at 2147483647"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#12",
+        "doc:github:tidwall/btree#48"
+      ]
+    },
+    {
+      "id": "btree-tinygo",
+      "question": "What goes wrong when the README's Set example is built with tinygo for WASI?",
+      "kind": "one",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "The build crashes in LLVM, in WebAssembly instruction selection.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#45",
+              "quote": "a bug in the WebAssembly instruction selection phase during code generation"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#13"
+      ]
+    },
+    {
+      "id": "btree-mutation-during-iteration",
+      "question": "A single-threaded program crashed in Next after calling Set part-way through an iteration. What explains it?",
+      "kind": "one",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "Set does not update the iterator's internal stack.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#39",
+              "quote": "Set() does not update the iterator's internal stack"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#9",
+        "doc:github:tidwall/btree#32"
+      ]
+    },
+    {
+      "id": "btree-clear-memory",
+      "question": "What was suggested so that a map emptied with Clear() need not allocate its nodes again?",
+      "kind": "one",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "Keep spare nodes in a MapNodeMemoryPool and reuse them.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#26",
+              "quote": "introducing a `MapNodeMemoryPool` field to store and reuse map nodes"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#34"
+      ]
+    },
+    {
+      "id": "puddle-atomic-int64-versions",
+      "question": "On which versions of Go did people run into 'undefined: atomic.Int64' when building puddle?",
+      "kind": "several",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "Go 1.18.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#26",
+              "quote": "causing build failures on Go 1.18 due to missing atomic.Int64"
+            }
+          ]
+        },
+        {
+          "fact": "Go 1.22.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#32",
+              "quote": "The issue is reported on Go 1.22"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#21"
+      ]
+    },
+    {
+      "id": "btree-seek-both-iterators",
+      "question": "Which of the library's iterators have a Seek that reports success without setting the item?",
+      "kind": "several",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "The tree's own iterator.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#14",
+              "quote": "`Seek()` does not initialize the iterator's internal item field even when it finds an item"
+            }
+          ]
+        },
+        {
+          "fact": "MapIter.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#15",
+              "quote": "The MapIter[K,V] Seek method fails to initialize the item internally when it returns true"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#46"
+      ]
+    },
+    {
+      "id": "puddle-nil-handling",
+      "question": "How does puddle now respond to a nil pool, and to a nil config?",
+      "kind": "several",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "Acquire on a nil pool returns an error.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#44",
+              "quote": "returns an error with the message \"puddle: nil Pool\""
+            }
+          ]
+        },
+        {
+          "fact": "NewPool returns an error for a nil config instead of panicking.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#45",
+              "quote": "return an error when given a nil config instead of panicking"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#13"
+      ]
+    },
+    {
+      "id": "btree-concurrency-panics",
+      "question": "In which functions has btree.Map been seen to panic when used from several goroutines?",
+      "kind": "several",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "nodeSet, during concurrent Set.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#32",
+              "quote": "in the nodeSet function of map.go, line 234"
+            }
+          ]
+        },
+        {
+          "fact": "search, during Get in a parallel test.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#59",
+              "quote": "in the `search` function where `low` is 34 but `n.items` has length 31"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:tidwall/btree#22",
+        "doc:github:tidwall/btree#39"
+      ]
+    },
+    {
+      "id": "btree-go-119",
+      "question": "Why does the btree package fail to compile with Go versions older than 1.19?",
+      "kind": "both",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "It uses atomic.Uint64, which is undefined before Go 1.19.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#21",
+              "quote": "Using Go version <1.19 causes a compiler error when using atomic.Uint64 due to undefined symbol"
+            }
+          ]
+        },
+        {
+          "fact": "A separate failure: under go1.18rc1 the package constraints was not found.",
+          "extra": true,
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#13",
+              "quote": "the package \"constraints\" is not in GOROOT"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#26",
+        "doc:github:jackc/puddle#32"
+      ],
+      "note": "Run by hand on 2026-11-12. puddle had the same trouble with atomic.Int64, which is what makes this one hard."
+    },
+    {
+      "id": "puddle-generics-compat",
+      "question": "How did puddle move its API to generics without breaking code written against the old one?",
+      "kind": "both",
+      "part": "check",
+      "facts": [
+        {
+          "fact": "Type aliases to types instantiated with any, and wrapper functions.",
+          "stated": [
+            {
+              "in": "doc:github:jackc/puddle#20",
+              "quote": "type aliases for `any` types and wrapper functions"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#19",
+        "doc:github:tidwall/btree#10",
+        "doc:github:tidwall/btree#31"
+      ]
+    },
+    {
+      "id": "btree-generics-user",
+      "question": "Which project wanted a generic btree in order to cut its heap allocations?",
+      "kind": "both",
+      "part": "tune",
+      "facts": [
+        {
+          "fact": "anacrolix/torrent.",
+          "stated": [
+            {
+              "in": "doc:github:tidwall/btree#10",
+              "quote": "anacrolix/torrent"
+            }
+          ]
+        }
+      ],
+      "near": [
+        "doc:github:jackc/puddle#19",
+        "doc:github:jackc/puddle#20",
+        "doc:github:tidwall/btree#31"
+      ]
+    },
+    {
+      "id": "puddle-max-lifetime",
+      "question": "What is the default maximum lifetime of a pooled resource in puddle, and which option changes it?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:jackc/puddle#27",
+        "doc:github:jackc/puddle#3",
+        "doc:github:jackc/puddle#33"
+      ],
+      "note": "Run by hand on 2026-11-12. No summary gives a maximum lifetime or an option for one; #27 only asks how to delete old resources."
+    },
+    {
+      "id": "puddle-sync-pool-differences",
+      "question": "In what ways does puddle differ from sync.Pool?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:jackc/puddle#38",
+        "doc:github:jackc/puddle#39"
+      ],
+      "note": "#38 asks, and #39 says the documentation now explains it. Neither summary says what the differences are."
+    },
+    {
+      "id": "puddle-resize-answer",
+      "question": "Was the offer to make the pool's maximum size adjustable at run time taken up?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:jackc/puddle#33"
+      ],
+      "note": "The summary holds only the offer. The maintainer's reply is in the comments, which the graph does not keep."
+    },
+    {
+      "id": "puddle-release-112",
+      "question": "Was the 1.1.2 release that someone asked for ever made?",
+      "kind": "absent",
+      "part": "check",
+      "near": [
+        "doc:github:jackc/puddle#5"
+      ],
+      "note": "The summary holds only the request."
+    },
+    {
+      "id": "btree-map-locks",
+      "question": "Does btree.Map do any locking of its own?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:tidwall/btree#22",
+        "doc:github:tidwall/btree#32",
+        "doc:github:tidwall/btree#59"
+      ],
+      "note": "#22 only asks. #32 and #59 show panics under concurrent use, which points at the answer, but no summary states it."
+    },
+    {
+      "id": "btree-path-hints",
+      "question": "What are path hints for, and when should I pass one?",
+      "kind": "absent",
+      "part": "check",
+      "near": [
+        "doc:github:tidwall/btree#7",
+        "doc:github:tidwall/btree#43",
+        "doc:github:tidwall/btree#47"
+      ],
+      "note": "#7 asks for examples and gets none in its summary; #43 and #47 are about where hints are exposed and used."
+    },
+    {
+      "id": "btree-rebalancing",
+      "question": "Can the tree grow unbalanced, and does it need rebalancing?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:tidwall/btree#36"
+      ],
+      "note": "The summary holds only the question."
+    },
+    {
+      "id": "btree-mut-meaning",
+      "question": "What does Mut stand for in IterMut, GetMut and ScanMut?",
+      "kind": "absent",
+      "part": "tune",
+      "near": [
+        "doc:github:tidwall/btree#54"
+      ],
+      "note": "#54 offers three guesses and settles on none."
+    },
+    {
+      "id": "nowhere-ci-windows",
+      "question": "Which CI service runs puddle's tests on Windows?",
+      "kind": "nowhere",
+      "part": "tune",
+      "note": "Nothing in the graph is about continuous integration."
+    },
+    {
+      "id": "nowhere-btree-licence",
+      "question": "Under which licence is tidwall/btree released?",
+      "kind": "nowhere",
+      "part": "check",
+      "note": "Nothing in the graph mentions a licence."
+    },
+    {
+      "id": "nowhere-puddle-sponsor",
+      "question": "Which company pays for puddle's development?",
+      "kind": "nowhere",
+      "part": "tune",
+      "note": "Nothing in the graph mentions funding."
+    },
+    {
+      "id": "btree-atomic-version",
+      "question": "Which version of btree appears in the compiler error about atomic.Uint64?",
+      "kind": "lost",
+      "part": "check",
+      "near": [
+        "doc:github:tidwall/btree#21"
+      ],
+      "note": "The original shows btree@v1.5.1/btreeg.go:41:17. The summary dropped the version and the file."
+    },
+    {
+      "id": "puddle-load-test-latency",
+      "question": "How long were calls to Acquire taking in the load test that led to the semaphore rewrite?",
+      "kind": "lost",
+      "part": "tune",
+      "near": [
+        "doc:github:jackc/puddle#24"
+      ],
+      "note": "The original says about 5 seconds. The summary says only 'long latency'."
+    },
+    {
+      "id": "puddle-close-wait-which-call",
+      "question": "Which call has to be in the middle of building a resource for Close to end up waiting for ever?",
+      "kind": "lost",
+      "part": "tune",
+      "near": [
+        "doc:github:jackc/puddle#48"
+      ],
+      "note": "The original says TryAcquire. The summary does not name the call."
+    },
+    {
+      "id": "btree-ascend-delete-deadlock",
+      "question": "Why does deleting from inside an Ascend callback deadlock in the locking tree?",
+      "kind": "lost",
+      "part": "tune",
+      "near": [
+        "doc:github:tidwall/btree#9"
+      ],
+      "note": "The original says sync.Mutex is not re-entrant. The summary keeps only that a deadlock is to be avoided."
+    }
+  ]
+}

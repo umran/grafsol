@@ -1,0 +1,6 @@
+{
+  "texts": [
+    "Checkout latency doubled\n\nCheckout p95 latency doubled to 410 ms after #812 removed the product cache.",
+    "payments\n\nEverything to do with taking payments."
+  ]
+}

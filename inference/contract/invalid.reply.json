@@ -1,0 +1,13 @@
+{
+  "error": "1 validation error for Input",
+  "detail": [
+    {
+      "type": "list_type",
+      "loc": [
+        "texts"
+      ],
+      "msg": "Input should be a valid array",
+      "url": "https://errors.pydantic.dev/2.14/v/list_type"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Credentials and machine-local settings. These are never committed.
+.env
+.env.*
+.claude/settings.local.json
+
+# Programs built at the top of the module (go build ./cmd/grafsol-mcp).
+/grafsol-mcp
+/grafsol-eval
+
+# macOS
+.DS_Store

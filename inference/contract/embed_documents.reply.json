@@ -1,0 +1,27 @@
+{
+  "model": "microsoft/harrier-oss-v1-0.6b",
+  "revision": "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee",
+  "space": "microsoft/harrier-oss-v1-0.6b@f9b9dc8d367d443f2479d27aa5d8d2850c0774ee; query prompt web_search_query; document prompt none; 8 dimensions",
+  "embeddings": [
+    [
+      0.5,
+      -0.5,
+      0.5,
+      -0.5,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.5,
+      0.5,
+      -0.5,
+      -0.5
+    ]
+  ]
+}
