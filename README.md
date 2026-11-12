@@ -38,24 +38,24 @@ the systems that own the documents and makes the graph reflect them. The other
 reads it: a search, started by an agent's question, gathers evidence from it.
 
 ```mermaid
-flowchart TB
+flowchart LR
     agent(["AI agent"]):::outside
-    mcp["MCP server<br/>cmd/grafsol-mcp"]:::code
-    local["Models on your machine<br/>summaries, embeddings"]:::local
     sources["Source systems<br/>GitHub today"]:::outside
-    engine["Search engine<br/>retrieval.Engine"]:::code
+    local["Local models<br/>summaries,<br/>embeddings"]:::local
+    mcp["MCP server<br/>grafsol-mcp"]:::code
     syncer["Sync engine<br/>ingest.Syncer"]:::code
-    jev{{"Jev<br/>the judge"}}:::paid
-    store[("The graph<br/>Postgres with pgvector")]:::data
+    engine["Search engine<br/>retrieval.Engine"]:::code
+    store[("The graph<br/>Postgres,<br/>pgvector")]:::data
+    jev("Jev<br/>the judge"):::paid
 
     agent -- "questions" --> mcp
-    mcp -- "one search each" --> engine
-    sources -- "changes" --> syncer
-    local <-. "embed the question" .-> engine
-    local <-. "summarise, embed" .-> syncer
-    engine -. "asks" .-> jev
+    mcp -- "searches" --> engine
     engine -- "reads" --> store
+    engine -. "asks" .-> jev
+    sources -- "changes" --> syncer
     syncer -- "writes" --> store
+    local <-.-> engine
+    local <-.-> syncer
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
@@ -63,6 +63,10 @@ flowchart TB
     classDef local fill:#fef3c7,stroke:#f59e0b,color:#0f172a
     classDef paid fill:#fae8ff,stroke:#c026d3,color:#0f172a
 ```
+
+The dotted lines are calls to models. The sync engine has each document
+summarised and embedded, and the search engine has each question embedded and
+asks Jev to judge.
 
 The colours mean the same in every diagram below: grey is outside grafsol, blue
 is grafsol's code, green is what is stored, amber is a model on your machine,
@@ -96,9 +100,9 @@ has a kind. This made-up example shows all four:
 
 ```mermaid
 flowchart LR
-    pr["Pull request 9<br/>Cache the price lookup"]:::doc
+    pr["Pull request 9<br/>Cache prices"]:::doc
     sub["Issue 12<br/>Add a load test"]:::doc
-    issue["Issue 7<br/>Slow checkout under load"]:::doc
+    issue["Issue 7<br/>Slow checkout"]:::doc
     checkout(["Topic<br/>checkout"]):::topic
     perf(["Topic<br/>performance"]):::topic
 
@@ -158,10 +162,10 @@ flowchart LR
     end
 
     subgraph syncer["ingest.Syncer"]
-        follow["Follow<br/>resumes from a checkpoint"]:::code
-        deliver["Deliver, or Handler<br/>checks it is authentic"]:::code
-        reconcile["Reconcile<br/>fills, and later repairs"]:::code
-        apply["Apply<br/>one change at a time"]:::code
+        follow["Follow<br/>resumes from<br/>a checkpoint"]:::code
+        deliver["Deliver<br/>checks it is<br/>authentic"]:::code
+        reconcile["Reconcile<br/>fills, and<br/>later repairs"]:::code
+        apply["Apply<br/>one change<br/>at a time"]:::code
     end
 
     store[("The graph")]:::data
@@ -183,26 +187,27 @@ current: it is prompt and cheap. A scan is the safety net under it. It fills
 the graph the first time, and run periodically it repairs whatever the feed
 missed.
 
-All three ways in end in `Apply`, which turns one change into graph writes:
+All three ways in end in `Apply`, which turns one change into graph writes.
+First the URLs found in the document become edges: every source is asked
+whether a URL is one of its own, so a link can cross from one system into
+another. Then the ledger says whether the change is news:
 
 ```mermaid
-flowchart TB
-    change(["A change<br/>one whole document,<br/>or word that it is gone"]):::outside
-    links["Resolve its links<br/>URLs become edges,<br/>even across systems"]:::code
+flowchart LR
+    links["Resolve links<br/>URLs become<br/>edges"]:::code
     news["Ask the ledger:<br/>is it news?"]:::data
-    old(["No: nothing is written"]):::outside
-    enrich["Summarise, then embed<br/>on your machine"]:::local
-    lock["Lock the document,<br/>ask the ledger again"]:::code
-    write["Write edges and topics,<br/>then the document"]:::data
-    remove["Remove the document<br/>and its outgoing edges"]:::data
-    record["Record it in the ledger,<br/>last of all"]:::data
+    old(["Nothing<br/>is written"]):::outside
+    enrich["Summarise,<br/>then embed"]:::local
+    lock["Lock it, ask<br/>the ledger<br/>again"]:::code
+    write["Write edges,<br/>topics and the<br/>document; the<br/>ledger last"]:::data
+    remove["Remove it,<br/>leave a<br/>tombstone"]:::data
 
-    change --> links --> news
-    news -- "older, or unchanged" --> old
-    news -- "new or different" --> enrich --> lock
+    links --> news
+    news -- "old news" --> old
+    news -- "new" --> enrich --> lock
     news -- "gone" --> lock
-    lock --> write --> record
-    lock --> remove --> record
+    lock -- "new" --> write
+    lock -- "gone" --> remove
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
@@ -248,26 +253,26 @@ http.Handle("POST /webhooks/github", syncer.Handler(repo)) // stay current
 ## One question, one search
 
 Package [`retrieval`](retrieval); the loop is in
-[`retrieval/search.go`](retrieval/search.go).
+[`retrieval/search.go`](retrieval/search.go). A search starts from the 8
+documents nearest the question, and from any anchors the caller names. Then it
+goes round a loop, one call to the judge each time, until one of three things
+ends it.
 
 ```mermaid
-flowchart TB
-    question(["A question<br/>and its context"]):::outside
-    seed["Embed it, and start from<br/>the 8 nearest documents<br/>and any anchors"]:::code
-    judge{{"Ask the judge, once<br/>rate the new leads,<br/>weigh the evidence"}}:::paid
-    follow["Follow the 3 best leads<br/>rated 0.25 or more"]:::code
-    visit["Visit them, all at once<br/>0.75 or more: evidence<br/>neighbours: new leads"]:::code
+flowchart LR
+    seed["Embed the<br/>question, start<br/>at the 8 nearest"]:::code
+    judge("Ask the judge<br/>rate new leads,<br/>weigh evidence"):::paid
+    follow["Follow the 3<br/>best leads at<br/>0.25 or more"]:::code
     sufficient(["sufficient"]):::outside
     exhausted(["exhausted"]):::outside
     stopped(["stopped"]):::outside
 
-    question --> seed --> judge
-    judge -- "enough: 0.7 or more" --> sufficient
-    judge -- "not enough" --> follow
-    follow -- "none worth following" --> exhausted
-    follow --> visit
-    visit -- "next step" --> judge
-    visit -- "12 steps, or out of time" --> stopped
+    seed --> judge
+    judge -- "enough" --> sufficient
+    judge -- "not yet" --> follow
+    follow -- "new leads, and<br/>evidence at 0.75" --> judge
+    follow -- "none left" --> exhausted
+    follow -- "a limit" --> stopped
 
     classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
     classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
@@ -406,11 +411,11 @@ made on the strength of the others was not fitted to them.
 
 ```mermaid
 flowchart LR
-    set[("The test set<br/>a frozen graph, and<br/>questions whose<br/>answers are known")]:::data
-    record["record -live<br/>the only step<br/>that costs anything"]:::code
-    jev{{"Jev"}}:::paid
-    tape[("The tape<br/>every answer, filed<br/>under what was asked")]:::data
-    report["report<br/>replays the tape through<br/>the real judge and search"]:::code
+    set[("The test set<br/>a frozen graph<br/>and questions<br/>with answers")]:::data
+    record["record -live<br/>the only step<br/>that costs"]:::code
+    jev("Jev"):::paid
+    tape[("The tape<br/>every answer,<br/>filed under<br/>its question")]:::data
+    report["report<br/>replays the<br/>tape, free"]:::code
 
     set --> record
     record <-- "what the tape lacks" --> jev
