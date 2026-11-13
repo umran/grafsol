@@ -507,23 +507,25 @@ once:
 ```
 
 **3. Fill a graph and ask it something.** The example copies the issues and
-pull requests of one GitHub repository into the graph, summarising and
-embedding each on the way:
+pull requests of one or more GitHub repositories into the graph, summarising
+and embedding each on the way:
 
 ```bash
 export TYPESAFE_API_KEY=...   # only needed with -question
-export GITHUB_TOKEN=...       # optional for a public repository
+export GITHUB_TOKEN=...       # optional for public repositories
 go run ./examples/github -repository owner/name -question "Why was X changed?"
+go run ./examples/github -repository owner/api,owner/web   # several, into one graph
 ```
 
 A summary takes a local model several seconds, so try a small repository first.
 Later runs only touch what has changed.
 
 > [!WARNING]
-> Give each repository a database of its own when you use the example. It
-> takes one repository per run and files every repository under one source
-> name, so a second run in a row for one repository would remove another
-> repository's documents from the same graph.
+> Name every repository on every run. The example files them all under one
+> source, and the sync engine takes a document that two runs in a row did not
+> list to be gone: leave a repository out twice and its documents are removed
+> from the graph. To keep two sets of repositories apart, give each set a
+> database of its own.
 
 **4. Put the graph in front of an agent.** Build the server and name it in your
 MCP client's configuration. Most clients take this form:

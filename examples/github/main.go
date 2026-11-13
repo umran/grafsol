@@ -1,6 +1,6 @@
 // Command github is a worked example of the whole module: it copies the
-// issues and pull requests of one GitHub repository into a graph in
-// Postgres, summarising and embedding each on the way, and then asks the
+// issues and pull requests of one or more GitHub repositories into a graph
+// in Postgres, summarising and embedding each on the way, and then asks the
 // graph a question.
 //
 // It needs a database, and the module's two model services running on this
@@ -18,11 +18,20 @@
 //
 //	go run ./examples/github -repository owner/name -question "Why was X changed?"
 //
-// The first run summarises and embeds every issue and pull request in the
-// repository, one after another. A summary takes a local model several
-// seconds, so try it on a small repository first. Later runs only touch what
-// has changed since. Leave out -question to fill the graph without asking
-// anything.
+// To put several repositories in one graph, repeat -repository or separate
+// the names with commas:
+//
+//	go run ./examples/github -repository owner/api,owner/web
+//
+// Name every one of them on every run. They are all filed under one source,
+// and the sync engine takes a document that two runs in a row did not list
+// to be gone: leave a repository out twice, and its documents are removed
+// from the graph.
+//
+// The first run summarises and embeds every issue and pull request, one
+// after another. A summary takes a local model several seconds, so try it on
+// a small repository first. Later runs only touch what has changed since.
+// Leave out -question to fill the graph without asking anything.
 //
 // The graph it fills is the one cmd/grafsol-mcp serves; run that with the
 // same database and the same embeddings service to put the graph in front
@@ -34,8 +43,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"iter"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -57,12 +69,13 @@ func main() {
 }
 
 func run() error {
-	repository := flag.String("repository", "", "the repository to copy, as `owner/name`")
+	var named repositories
+	flag.Var(&named, "repository", "a repository to copy, as `owner/name`; repeat the flag, or separate names with commas, to put several in one graph")
 	question := flag.String("question", "", "a question to ask the graph once it is filled")
 	embeddings := flag.String("embeddings", "http://127.0.0.1:3010", "the `address` of the embeddings service")
 	summaries := flag.String("summaries", "http://127.0.0.1:3011", "the `address` of the summaries service")
 	flag.Parse()
-	if *repository == "" {
+	if len(named) == 0 {
 		return errors.New("name a repository with -repository owner/name")
 	}
 	databaseURL := os.Getenv("GRAFSOL_POSTGRES_URL")
@@ -99,23 +112,26 @@ func run() error {
 	}
 	store, ledger := postgres.New(pool), postgres.NewLedger(pool)
 
-	// Ingestion: scan the repository and make the graph match it. Each
+	// Ingestion: scan the repositories and make the graph match them. Each
 	// document that is new or has changed is summarised, then embedded.
-	repo, err := github.New(github.Config{Repositories: []string{*repository}, Token: os.Getenv("GITHUB_TOKEN")})
+	// Every repository is covered by the one source, and so by the one
+	// scan: what a scan does not list, the graph will in time let go of.
+	repos, err := github.New(github.Config{Repositories: named, Token: os.Getenv("GITHUB_TOKEN")})
 	if err != nil {
 		return err
 	}
 	syncer := ingest.NewSyncer(ingest.Config{
 		Store:     store,
 		Ledger:    ledger,
-		Sources:   []source.Source{repo},
+		Sources:   []source.Source{repos},
 		Enrichers: []ingest.Enricher{ingest.Summarize(summarizer), ingest.Embed(embedder)},
 	})
-	report, err := syncer.Reconcile(ctx, repo)
+	fmt.Printf("copying %s\n", named.sentence())
+	report, err := syncer.Reconcile(ctx, progress{Scanner: repos, out: os.Stdout, every: 10})
 	if err != nil {
 		return fmt.Errorf("after %d documents applied: %w", report.Applied, err)
 	}
-	fmt.Printf("%s: %d applied, %d unchanged, %d removed\n", *repository, report.Applied, report.Unchanged, report.Removed)
+	fmt.Printf("%d applied, %d unchanged, %d removed\n", report.Applied, report.Unchanged, report.Removed)
 	if report.Declined > 0 {
 		fmt.Printf("  %d of those applied were stored without something a model refused to add; the log above says which, and why\n", report.Declined)
 	}
@@ -136,12 +152,74 @@ func run() error {
 		Embedder:  embedder,
 		Judge:     jev.New(jev.Config{Client: typesafe.New(typesafe.Config{APIKey: apiKey})}),
 	})
-	findings, err := engine.Gather(ctx, retrieval.Question{Text: *question, Context: "The repository " + *repository + " on GitHub."})
+	// The judge is told which repositories the question is about.
+	setting := named.sentence() + " on GitHub."
+	findings, err := engine.Gather(ctx, retrieval.Question{Text: *question, Context: strings.ToUpper(setting[:1]) + setting[1:]})
 	if err != nil {
 		return err
 	}
 	show(findings)
 	return nil
+}
+
+// repositories is the -repository flag: every repository named, in the
+// order given. The flag may be repeated, and each use of it may name several
+// repositories, separated by commas.
+type repositories []string
+
+func (r *repositories) String() string { return strings.Join(*r, ",") }
+
+// Set takes in one use of the flag. An empty name is refused, not passed
+// over: it is what an unset shell variable leaves behind, and passing over
+// it would quietly copy fewer repositories than were asked for.
+func (r *repositories) Set(value string) error {
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return errors.New("a repository's name is empty")
+		}
+		*r = append(*r, name)
+	}
+	return nil
+}
+
+// sentence names the repositories in words: "the repository a/b", or "the
+// repositories a/b, c/d and e/f".
+func (r repositories) sentence() string {
+	switch len(r) {
+	case 0:
+		return "no repository"
+	case 1:
+		return "the repository " + r[0]
+	}
+	last := len(r) - 1
+	return "the repositories " + strings.Join(r[:last], ", ") + " and " + r[last]
+}
+
+// progress is a scanner that says, as it is read, how far the scan has got.
+// A first run summarises every document, which takes minutes, and would
+// otherwise pass in silence.
+type progress struct {
+	source.Scanner
+	out   io.Writer
+	every int // say so after each this many documents
+}
+
+// Scan passes on everything the scanner beneath it lists, untouched.
+func (p progress) Scan(ctx context.Context, resume source.Checkpoint) iter.Seq2[source.Change, error] {
+	return func(yield func(source.Change, error) bool) {
+		read := 0
+		for change, err := range p.Scanner.Scan(ctx, resume) {
+			if err == nil {
+				if read++; read%p.every == 0 {
+					fmt.Fprintf(p.out, "  %d documents read\n", read)
+				}
+			}
+			if !yield(change, err) {
+				return
+			}
+		}
+	}
 }
 
 // show prints what a search found, with where each piece came from.
