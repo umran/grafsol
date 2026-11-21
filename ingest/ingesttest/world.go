@@ -98,8 +98,9 @@ func (w *World) Mutate(changes int) {
 	}
 }
 
-// describe invents a new state for a document: fresh text and a fresh set
-// of edges, which may have nothing in common with the ones it had before.
+// describe invents a new state for a document: fresh text, and a fresh set
+// of references, labels and edges, which may have nothing in common with
+// the ones it had before.
 func (w *World) describe(id graph.ID) source.Change {
 	w.clock++
 	change := source.Change{
@@ -116,20 +117,26 @@ func (w *World) describe(id graph.ID) source.Change {
 		Content: fmt.Sprintf("text number %d", w.random.IntN(1_000_000)),
 	}
 
-	// Links to a few other documents, living or not: an edge may well point
-	// at a document that no longer exists.
+	// Mentions of a few other documents, living or not: a reference may
+	// well point at a document that no longer exists.
 	others := slices.DeleteFunc(slices.Clone(w.ever), func(other graph.ID) bool { return other == id })
 	w.random.Shuffle(len(others), func(i, j int) { others[i], others[j] = others[j], others[i] })
-	links := min(len(others), w.random.IntN(4))
-	for _, other := range others[:links] {
-		change.LinkTo(other, fmt.Sprintf("revision %d mentions %s", w.clock, other.Key()))
+	mentions := min(len(others), w.random.IntN(4))
+	for _, other := range others[:mentions] {
+		change.Mention(other, other.Key(), fmt.Sprintf("revision %d mentions %s", w.clock, other.Key()))
 	}
-	if len(others) > links && w.random.IntN(3) == 0 {
-		change.ChildOf(others[links], "part of")
+	others = others[mentions:]
+	if len(others) > 0 && w.random.IntN(3) == 0 {
+		change.Parent(others[0], "part of")
+		others = others[1:]
 	}
-	for _, tag := range []string{"bug", "billing", "docs", "urgent"} {
+	// Now and then the world states an edge outright, kind and all.
+	if len(others) > 0 && w.random.IntN(4) == 0 {
+		change.Edges = append(change.Edges, graph.Edge{From: id, Kind: "supersedes", To: others[0], Summary: fmt.Sprintf("stated at revision %d", w.clock)})
+	}
+	for _, label := range []string{"bug", "billing", "docs", "urgent"} {
 		if w.random.IntN(4) == 0 {
-			change.Tag(tag, "")
+			change.Label(label, "")
 		}
 	}
 	return change

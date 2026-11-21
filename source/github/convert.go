@@ -96,7 +96,8 @@ func (i issue) parent() (graph.ID, bool) {
 }
 
 // change describes an issue or pull request of a repository as a
-// source.Change: the document, and every edge that starts at it.
+// source.Change: the document, the labels on it, and everything it points
+// at. What those become in the graph is not decided here.
 func (s *Source) change(repository string, item issue, pullRequest bool) (source.Change, error) {
 	if item.Number <= 0 {
 		return source.Change{}, fmt.Errorf("github: an item of %s has no number", repository)
@@ -122,24 +123,24 @@ func (s *Source) change(repository string, item issue, pullRequest bool) (source
 
 	for _, label := range item.Labels {
 		if label.Name != "" {
-			change.Tag(label.Name, label.Description)
+			change.Label(label.Name, label.Description)
 		}
 	}
 	if parent, ok := item.parent(); ok {
-		change.ChildOf(parent, "sub-issue of")
+		change.Parent(parent, "sub-issue of")
 	}
 	for _, reference := range references(repository, item.Title+"\n"+item.Body) {
 		switch {
 		case reference.url == "":
-			change.LinkTo(reference.target, reference.context)
+			change.Mention(reference.target, reference.written, reference.context)
 		default:
-			// A link to another issue or pull request on GitHub is ours to
-			// recognize. Anything else may belong to another source, which
+			// The address of another issue or pull request on GitHub is ours
+			// to recognize. Any other may belong to another source, which
 			// only the sync engine can tell.
 			if target, ours := s.Resolve(reference.url); ours {
-				change.LinkTo(target, reference.context)
+				change.Mention(target, reference.written, reference.context)
 			} else {
-				change.LinkURL(reference.url, reference.context)
+				change.MentionURL(reference.url, reference.context)
 			}
 		}
 	}

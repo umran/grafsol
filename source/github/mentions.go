@@ -11,6 +11,7 @@ import (
 type reference struct {
 	target  graph.ID // an issue or pull request, for "#12" and "acme/web#12"
 	url     string   // set instead of target when the reference is a URL
+	written string   // the reference as the text has it: "#12", "acme/web#12", the URL
 	context string   // the line the reference was found on
 }
 
@@ -25,7 +26,7 @@ var (
 	mentionPattern = regexp.MustCompile(`(^|[^\w/#&])([\w.-]+/[\w.-]+)?#(\d+)\b`)
 )
 
-// maxContext bounds how much of a line is kept as an edge's summary.
+// maxContext bounds how much of a line is kept as a reference's context.
 const maxContext = 240
 
 // references finds what a piece of GitHub Markdown points at: mentions of
@@ -36,6 +37,9 @@ const maxContext = 240
 // likely a comment or a colour than a mention. Beyond that the text is not
 // parsed as Markdown, so the occasional false mention gets through. It
 // becomes an edge to a document that does not exist, which is harmless.
+//
+// A line is kept up to maxContext characters. A reference further along a
+// longer line is still reported, with a context that no longer holds it.
 func references(repository, text string) []reference {
 	var found []reference
 	fenced := false
@@ -53,7 +57,7 @@ func references(repository, text string) []reference {
 		for _, url := range urlPattern.FindAllString(line, -1) {
 			// Punctuation that ends a sentence is not part of the link.
 			url = strings.TrimRight(url, ".,;:!?")
-			found = append(found, reference{url: url, context: context})
+			found = append(found, reference{url: url, written: url, context: context})
 		}
 
 		// Blank out the URLs before looking for mentions, so that the
@@ -70,7 +74,7 @@ func references(repository, text string) []reference {
 			if !ok {
 				continue
 			}
-			found = append(found, reference{target: documentID(mentioned, number), context: context})
+			found = append(found, reference{target: documentID(mentioned, number), written: match[2] + "#" + match[3], context: context})
 		}
 	}
 	return found

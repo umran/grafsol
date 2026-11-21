@@ -52,45 +52,64 @@ func beyondTitle(title, content string) string {
 // which is how the Syncer knows what the graph is being given. If the change
 // already carries embeddings from another space, Embed adds none and fails
 // the change: one change cannot hold embeddings from two.
+//
+// The topics that the graph's rules make of a document's labels are not on
+// the change, so Embed does not see them. A Syncer embeds those with e as
+// well, when it creates them (see Config.Embedder).
 func Embed(e model.Embedder) Enricher {
-	return EnricherFunc(func(ctx context.Context, c *source.Change) error {
-		// Each text is paired with the place its vector belongs.
-		var texts []string
-		var places []*[]float32
-		add := func(place *[]float32, title, summary string) {
-			text := strings.TrimSpace(title + "\n\n" + summary)
-			if len(*place) == 0 && text != "" {
-				texts = append(texts, text)
-				places = append(places, place)
-			}
-		}
-		add(&c.Document.Embedding, c.Document.Title, c.Document.Summary)
-		for i := range c.Topics {
-			add(&c.Topics[i].Embedding, c.Topics[i].Name, c.Topics[i].Summary)
-		}
-		if len(texts) == 0 {
-			return nil
-		}
+	return embedEnricher{embedder: e}
+}
 
-		space, err := e.Space(ctx)
-		if err != nil {
-			return err
-		}
-		if c.EmbeddingSpace != "" && c.EmbeddingSpace != space {
-			return fmt.Errorf("%w: the change already carries embeddings in %q, and the embedder's are in %q", storage.ErrOtherSpace, c.EmbeddingSpace, space)
-		}
+// embedEnricher is the Enricher that Embed returns. It is a type of its own
+// so that a Syncer can find the embedder among its Enrichers.
+type embedEnricher struct {
+	embedder model.Embedder
+}
 
-		vectors, err := e.EmbedDocuments(ctx, texts)
-		if err != nil {
-			return err
+// Enrich implements Enricher.
+func (e embedEnricher) Enrich(ctx context.Context, c *source.Change) error {
+	// Each text is paired with the place its vector belongs.
+	var texts []string
+	var places []*[]float32
+	add := func(place *[]float32, title, summary string) {
+		if text := embeddable(title, summary); len(*place) == 0 && text != "" {
+			texts = append(texts, text)
+			places = append(places, place)
 		}
-		if len(vectors) != len(texts) {
-			return fmt.Errorf("ingest: the embedder returned %d vectors for %d texts", len(vectors), len(texts))
-		}
-		for i, vector := range vectors {
-			*places[i] = vector
-		}
-		c.EmbeddingSpace = space
+	}
+	add(&c.Document.Embedding, c.Document.Title, c.Document.Summary)
+	for i := range c.Topics {
+		add(&c.Topics[i].Embedding, c.Topics[i].Name, c.Topics[i].Summary)
+	}
+	if len(texts) == 0 {
 		return nil
-	})
+	}
+
+	space, err := e.embedder.Space(ctx)
+	if err != nil {
+		return err
+	}
+	if c.EmbeddingSpace != "" && c.EmbeddingSpace != space {
+		return fmt.Errorf("%w: the change already carries embeddings in %q, and the embedder's are in %q", storage.ErrOtherSpace, c.EmbeddingSpace, space)
+	}
+
+	vectors, err := e.embedder.EmbedDocuments(ctx, texts)
+	if err != nil {
+		return err
+	}
+	if len(vectors) != len(texts) {
+		return fmt.Errorf("ingest: the embedder returned %d vectors for %d texts", len(vectors), len(texts))
+	}
+	for i, vector := range vectors {
+		*places[i] = vector
+	}
+	c.EmbeddingSpace = space
+	return nil
+}
+
+// embeddable returns the text that stands for a vertex when it is embedded:
+// a document's title and summary, a topic's name and summary. It is empty
+// for a vertex that has neither.
+func embeddable(title, summary string) string {
+	return strings.TrimSpace(title + "\n\n" + summary)
 }

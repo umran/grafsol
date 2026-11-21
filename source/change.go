@@ -11,9 +11,9 @@ import (
 // Change is the complete state of one document at one moment, or word that
 // the document is gone.
 //
-// A change stands on its own: it lists the document's fields and every edge
-// that starts at the document, so applying it never depends on what was
-// applied before.
+// A change stands on its own: it lists the document's fields and everything
+// that the edges starting at the document are made from, so applying it
+// never depends on what was applied before.
 type Change struct {
 	// Document is the document as it now is. For a removal only ID and
 	// Source need to be set. Summary and Embedding are normally left empty
@@ -35,13 +35,28 @@ type Change struct {
 	// summary and compute the embedding; it is not stored in the graph.
 	Content string
 
-	// Edges is every edge that starts at the document. Edges the document
-	// used to have and that are missing from this list are removed from the
-	// graph. Each edge's From must be Document.ID.
-	Edges []graph.Edge
+	// References is everything the document points at, told the way the
+	// source told it: a mention found in its text, a parent the source
+	// records, a relation the source gives a name. Labels are the labels,
+	// tags or categories the source put on the document.
+	//
+	// A connector reports these and stops there. Which kind of edge a
+	// reference becomes, and which topic a label files the document under,
+	// is for the graph's rules to say (package mapping), and a team may
+	// change its mind about that without the source being read again.
+	References []graph.Reference
+	Labels     []graph.Label
 
-	// Topics describes the topics that Edges point at, so that a topic can
-	// be created the first time a document refers to it.
+	// Edges is for a source that states an edge outright, kind and all,
+	// because it knows what the relationship is and no rule has anything to
+	// add. Such edges go into the graph as they are. Each edge's From must
+	// be Document.ID. Topics describes the topics those edges point at, so
+	// that a topic can be created the first time a document refers to it.
+	//
+	// References, Labels and Edges together are everything that starts at
+	// the document. An edge the document used to have, and that nothing in
+	// this change gives rise to, is removed from the graph.
+	Edges  []graph.Edge
 	Topics []graph.Topic
 
 	// EmbeddingSpace names the embedding space that the embeddings in this
@@ -52,24 +67,10 @@ type Change struct {
 	// one space, and could not tell whether these belong in it.
 	EmbeddingSpace string
 
-	// Links are URLs found in the document that the connector could not
-	// turn into edges itself, typically because they point into another
-	// system. The sync engine resolves them across all sources.
-	Links []Link
-
 	// Checkpoint is the position in the feed or scan that produced this
 	// change, to resume from once the change has been applied. It is empty
 	// when the change did not come from something resumable.
 	Checkpoint Checkpoint
-}
-
-// Link is a URL found in a document.
-type Link struct {
-	URL string
-
-	// Context is the text around the link. It becomes the Summary of the
-	// edge the link turns into.
-	Context string
 }
 
 // Checkpoint is a position in a source's change log or scan. It is opaque:
@@ -95,41 +96,33 @@ var (
 	ErrMalformed = errors.New("source: delivery is malformed")
 )
 
-// LinkTo records that the document references another document. context is
-// the text around the reference; it becomes the edge's summary.
-func (c *Change) LinkTo(target graph.ID, context string) {
-	c.Edges = append(c.Edges, graph.Edge{From: c.Document.ID, Kind: graph.LinksTo, To: target, Summary: context})
+// Mention records that the document's text points at another document.
+// written is the reference as it stood in the text ("#12", "acme/web#3", an
+// address), and context is the line it was on: rules look at both to decide
+// what the mention means.
+func (c *Change) Mention(target graph.ID, written, context string) {
+	c.References = append(c.References, graph.Reference{Target: target, Form: graph.FormMention, Written: written, Context: context})
 }
 
-// LinkURL records a URL found in the document, for the sync engine to
-// resolve. context is the text around the URL.
-func (c *Change) LinkURL(url, context string) {
-	c.Links = append(c.Links, Link{URL: url, Context: context})
+// MentionURL records an address found in the document's text that the
+// connector cannot put a document to, typically because it points into
+// another system. The sync engine asks every source whose it is. context is
+// the line the address was on.
+func (c *Change) MentionURL(url, context string) {
+	c.References = append(c.References, graph.Reference{URL: url, Form: graph.FormMention, Written: url, Context: context})
 }
 
-// ChildOf records that the document sits under parent in a hierarchy.
-// summary says how, for example "sub-issue of".
-func (c *Change) ChildOf(parent graph.ID, summary string) {
-	c.Edges = append(c.Edges, graph.Edge{From: c.Document.ID, Kind: graph.ChildOf, To: parent, Summary: summary})
+// Parent records that the source places the document under another: a
+// sub-issue under its issue, a page under its parent page. context says how,
+// in the source's own words, for example "sub-issue of".
+func (c *Change) Parent(parent graph.ID, context string) {
+	c.References = append(c.References, graph.Reference{Target: parent, Form: graph.FormParent, Context: context})
 }
 
-// Tag records that the document carries the named tag. description says
-// what the tag means, if the source knows; it becomes the topic's summary
-// when the topic is first created.
-func (c *Change) Tag(name, description string) {
-	c.pointAtTopic(graph.TaggedWith, name, description)
-}
-
-// InTopic records that the document belongs to the named topic. description
-// says what the topic covers, if the source knows.
-func (c *Change) InTopic(name, description string) {
-	c.pointAtTopic(graph.InTopic, name, description)
-}
-
-func (c *Change) pointAtTopic(kind graph.EdgeKind, name, description string) {
-	topic := graph.Topic{ID: graph.TopicID(name), Name: name, Summary: description}
-	c.Topics = append(c.Topics, topic)
-	c.Edges = append(c.Edges, graph.Edge{From: c.Document.ID, Kind: kind, To: topic.ID})
+// Label records a label, tag or category that the source put on the
+// document. description says what the label is for, if the source knows.
+func (c *Change) Label(name, description string) {
+	c.Labels = append(c.Labels, graph.Label{Name: name, Description: description})
 }
 
 // Validate reports what is wrong with the change, or nil. The sync engine
@@ -162,9 +155,14 @@ func (c *Change) Validate() error {
 			return fmt.Errorf("source: change for %s: %w", id, err)
 		}
 	}
-	for _, link := range c.Links {
-		if link.URL == "" {
-			return fmt.Errorf("source: change for %s carries a link with no URL", id)
+	for _, reference := range c.References {
+		if err := reference.Validate(); err != nil {
+			return fmt.Errorf("source: change for %s: %w", id, err)
+		}
+	}
+	for _, label := range c.Labels {
+		if err := label.Validate(); err != nil {
+			return fmt.Errorf("source: change for %s: %w", id, err)
 		}
 	}
 	if c.HasEmbeddings() && c.EmbeddingSpace == "" {

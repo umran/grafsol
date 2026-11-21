@@ -67,9 +67,9 @@ func (d *Document) Clone() *Document {
 }
 
 // Topic is a vertex standing for a subject. Documents point at topics with
-// InTopic edges (the document belongs to the topic) and TaggedWith edges
-// (somebody labelled the document with it), which makes a topic a hub that
-// connects otherwise unrelated documents.
+// InTopic edges (the document belongs to the topic: it carries the topic's
+// label, or was filed under it), which makes a topic a hub that connects
+// otherwise unrelated documents.
 type Topic struct {
 	ID        ID
 	Name      string // as people write it: "Good First Issue"

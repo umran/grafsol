@@ -7,6 +7,10 @@
 // enough. It only reads the graph; keeping the graph in step with its
 // sources is the job of package ingest, run elsewhere.
 //
+// How a document was reached is part of what the judge is shown, in the
+// words the graph's settings give each kind of edge ("it resolves X"). The
+// server reads those settings as it starts and again every minute.
+//
 // By default the server talks over standard input and output, which is how
 // an agent on the same machine starts it. With -http it serves the same tool
 // over HTTP instead.
@@ -82,6 +86,18 @@ func run(logger *slog.Logger) error {
 	}
 
 	store := postgres.New(pool)
+
+	// The words the judge is shown for each kind of edge are the graph's
+	// own, read now and again every minute: a team may define a kind, or
+	// reword one, while the server runs.
+	words := newWording()
+	if err := words.refresh(ctx, store); err != nil {
+		logger.Warn("the graph's settings could not be read, so the judge is shown the words every graph begins with; "+
+			"a database last written by an earlier version of grafsol has none until a program that writes to it has run",
+			"error", err)
+	}
+	go words.keep(ctx, store, time.Minute, logger)
+
 	engine := retrieval.NewEngine(retrieval.Config{
 		Store:     store,
 		Searcher:  store,
@@ -90,6 +106,7 @@ func run(logger *slog.Logger) error {
 		Judge: jev.New(jev.Config{
 			Client: typesafe.New(typesafe.Config{APIKey: cfg.typesafeKey}),
 			Model:  cfg.jevModel,
+			Phrase: words.Phrase,
 		}),
 		MaxDuration: *timeout,
 	})

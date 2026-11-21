@@ -111,7 +111,7 @@ func TestLeadsAreEveryWayASearchCouldComeAcrossAVertex(t *testing.T) {
 		got = append(got, s)
 	}
 	causes := set.Graph.Edges[0] // cache links to slow
-	tagged := set.Graph.Edges[1] // slow is tagged with the topic
+	tagged := set.Graph.Edges[1] // slow belongs to the topic
 	want := []shape{
 		// Each document as a place to start.
 		{target: slow}, {target: cache}, {target: dashboard}, {target: rota},

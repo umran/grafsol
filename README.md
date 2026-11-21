@@ -24,6 +24,7 @@ runs on your own machine.
 - [How it fits together](#how-it-fits-together)
 - [The graph](#the-graph)
 - [Keeping the graph in step](#keeping-the-graph-in-step)
+- [What a mention becomes](#what-a-mention-becomes)
 - [One question, one search](#one-question-one-search)
 - [An agent asks over MCP](#an-agent-asks-over-mcp)
 - [Measuring the judge](#measuring-the-judge)
@@ -102,7 +103,7 @@ switches off the usage reporting of BentoML and Hugging Face.
 ## The graph
 
 A vertex is a document or a topic. An edge runs from one vertex to another and
-has a kind. This made-up example shows all four:
+has a kind. This made-up example shows three kinds:
 
 ```mermaid
 flowchart TB
@@ -114,11 +115,11 @@ flowchart TB
         checkout(["Topic<br/>checkout"]):::topic
         perf(["Topic<br/>performance"]):::topic
 
-        pr -- "links_to<br/>fixes the slow query in" --> issue
+        pr -- "resolves<br/>fixes the slow query in" --> issue
         sub -- "child_of<br/>sub-issue of" --> issue
         issue -- "in_topic" --> checkout
-        issue -- "tagged_with" --> perf
-        pr -- "tagged_with" --> perf
+        issue -- "in_topic" --> perf
+        pr -- "in_topic" --> perf
     end
 
     %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
@@ -130,12 +131,22 @@ flowchart TB
     style corner fill:none,stroke:none
 ```
 
-| Edge | Runs | Means |
-| --- | --- | --- |
-| `links_to` | document to document | the first references the second |
-| `child_of` | document to document | the first sits under the second |
-| `in_topic` | document to topic | the document belongs to the topic |
-| `tagged_with` | document to topic | the document carries the topic as a tag |
+The kinds are a team's to define. Every graph begins with these seven. Each
+has a phrase, which is what the judge is shown when a search follows an edge
+of that kind: "it *resolves* issue 7", or "pull request 9 *resolves* it".
+
+| Kind | Runs | Phrase | Means |
+| --- | --- | --- | --- |
+| `links_to` | document to document | links to | the first mentions the second, and nothing says more than that |
+| `child_of` | document to document | is a part of | the first sits under the second: a sub-issue of an issue |
+| `resolves` | document to document | resolves | the first settles what the second asks for: a pull request that fixes an issue |
+| `duplicates` | document to document | duplicates | the first reports, or does, what the second already does |
+| `blocks` | document to document | blocks | the second cannot go ahead until the first is done |
+| `supersedes` | document to document | supersedes | the first takes the place of the second |
+| `in_topic` | document to topic | belongs to | the document carries the topic's label, or was filed under it |
+
+Which kind an edge gets is decided by rules, not by the connector that read
+the document: see [What a mention becomes](#what-a-mention-becomes).
 
 What each thing carries:
 
@@ -202,20 +213,20 @@ the graph the first time, and run periodically it repairs whatever the feed
 missed.
 
 All three ways in end in `Apply`, which turns one change into graph writes.
-First the URLs found in the document become edges: every source is asked
-whether a URL is one of its own, so a link can cross from one system into
-another. Then the ledger says whether the change is news:
+First the addresses found in the document are placed: every source is asked
+whether an address is one of its own, so a reference can cross from one system
+into another. Then the ledger says whether the change is news:
 
 ```mermaid
 flowchart TB
     subgraph all[" "]
         direction LR
-        links["Resolve links<br/>URLs become<br/>edges"]:::code
+        links["Place addresses<br/>ask each source<br/>whose it is"]:::code
         news["Ask the ledger:<br/>is it news?"]:::data
         old(["Nothing<br/>is written"]):::outside
         enrich["Summarise,<br/>then embed"]:::local
         lock["Lock it, ask<br/>the ledger<br/>again"]:::code
-        write["Write edges,<br/>topics and the<br/>document; the<br/>ledger last"]:::data
+        write["Keep a record;<br/>write edges,<br/>topics and the<br/>document; the<br/>ledger last"]:::data
         remove["Remove it,<br/>leave a<br/>tombstone"]:::data
 
         links --> news
@@ -237,9 +248,10 @@ flowchart TB
     style corner fill:none,stroke:none
 ```
 
-The models run before the lock is taken, because they can take seconds. The
-ledger is written last, so a process that dies part-way leaves a change that
-simply counts as not yet applied.
+The models run before the lock is taken, because they can take seconds. What
+the source said is put on record before the edges are made of it. The ledger
+is written last, so a process that dies part-way leaves a change that simply
+counts as not yet applied.
 
 Changes may be lost, repeated, reordered or handled by several workers at
 once. Each of those has its own remedy:
@@ -268,9 +280,77 @@ syncer := ingest.NewSyncer(ingest.Config{
     Enrichers: []ingest.Enricher{ingest.Summarize(summarizer), ingest.Embed(embedder)},
 })
 
+remade, err := syncer.Composer().CatchUp(ctx)              // once at start: act on rules that have changed
 report, err := syncer.Reconcile(ctx, repo)                 // fill the graph, or repair it
 http.Handle("POST /webhooks/github", syncer.Handler(repo)) // stay current
 ```
+
+## What a mention becomes
+
+Package [`mapping`](mapping). A connector does not decide what an edge means.
+It reports what a document's source said: each thing the document points at (a
+**reference**: a mention such as "#38" with the line it stood on, or the
+parent the source records) and each **label** on it. **Rules** say what each of
+those becomes. What was said is kept on record beside the graph, so the rules
+can change without any source being read again.
+
+```mermaid
+flowchart TB
+    subgraph all[" "]
+        direction LR
+        said["GitHub said<br/>Fixes #38<br/>label: bug<br/>parent: #7"]:::outside
+        record[("The record<br/>kept beside<br/>the graph")]:::data
+        rules["Rules<br/>the team's,<br/>then GitHub's"]:::code
+        edges[("The graph<br/>resolves #38<br/>in_topic bug<br/>child_of #7")]:::data
+        settings[("Settings<br/>kinds, rules,<br/>merged topics")]:::data
+
+        said --> record --> rules --> edges
+        settings -. "read each time" .-> rules
+    end
+
+    %% An empty row at the bottom: GitHub lays its zoom buttons over that corner.
+    all ~~~ corner["&nbsp;<br/>&nbsp;<br/>&nbsp;"]
+
+    classDef outside fill:#e2e8f0,stroke:#64748b,color:#0f172a
+    classDef code fill:#dbeafe,stroke:#3b82f6,color:#0f172a
+    classDef data fill:#dcfce7,stroke:#22c55e,color:#0f172a
+    style all fill:none,stroke:none
+    style corner fill:none,stroke:none
+```
+
+A rule is a form to fill in, not a pattern language:
+
+| Part | Choices |
+| --- | --- |
+| When | a reference of one form (a mention, a parent): anywhere, *after one of these words*, or *alone on its line*. Or a label whose name matches, with `*` for any run of characters. |
+| Then | relate the two documents as a kind, or file the document under a topic, or ignore it |
+
+The first rule that matches wins: a team's own rules in the order the team
+puts them, then the rules the source ships with. For GitHub those are:
+
+| When | Then |
+| --- | --- |
+| a mention after close, closes, closed, fix, fixes, fixed, resolve, resolves or resolved | `resolves` |
+| a mention after "duplicate of" | `duplicates` |
+| the parent of a sub-issue | `child_of` |
+| any other mention | `links_to` |
+| any label | `in_topic`, under a topic of the label's name |
+
+"After one of these words" means the word comes before the reference on its
+line with nothing between them but other references and joining words. So
+every reference in "closes #2, #3 and #4" is closed, and none in "As described
+in issue #25, the worker hangs" is.
+
+A team's kinds, its rules and the topics it has merged are one stored
+document, the graph's settings (`mapping.Settings`, kept through
+`storage.Settings`). Every save of it has a version, and a save made from a
+version that is no longer the one stored is refused, so two people editing at
+once cannot undo each other. When the settings have changed,
+`Composer.CatchUp` makes every document's edges again from what is on record.
+No source is read for that, and nothing is summarised or embedded again.
+
+There is nothing to edit the settings with yet except code; see
+[What is not here yet](#what-is-not-here-yet).
 
 ## One question, one search
 
@@ -520,6 +600,12 @@ go run ./examples/github -repository owner/api,owner/web   # several, into one g
 A summary takes a local model several seconds, so try a small repository first.
 Later runs only touch what has changed.
 
+A graph filled by an earlier version of grafsol is brought up to date by the
+same command. The first run upgrades the database and makes every document's
+edges again under the rules above, without summarising anything again. Stop
+any older program that writes to the graph first, and run this before starting
+a newer `grafsol-mcp` on it.
+
 > [!WARNING]
 > Name every repository on every run. The example files them all under one
 > source, and the sync engine takes a document that two runs in a row did not
@@ -568,12 +654,13 @@ knowing only the ones above it. [`doc.go`](doc.go) says more.
 
 | Package | What it is |
 | --- | --- |
-| [`graph`](graph) | The vocabulary: documents, topics, edges and their IDs. Pure data. |
-| [`storage`](storage) | What it takes to keep a graph: a `Store`, a `DocumentSearcher`, a `NeighborSearcher` and a `Ledger`. `storage/memory` is for tests and small graphs, `storage/postgres` for real ones, and both pass the suites in `storage/storagetest`. |
+| [`graph`](graph) | The vocabulary: documents, topics, edges and their IDs, and the references and labels a source reports. Pure data. |
+| [`mapping`](mapping) | Kinds of edge, the rules that say what a reference or a label becomes, and the settings that hold both. Pure, no I/O. |
+| [`storage`](storage) | What it takes to keep a graph: a `Store`, a `DocumentSearcher`, a `NeighborSearcher`, the `Record` of what sources said, the graph's `Settings`, and a `Ledger`. `storage/memory` is for tests and small graphs, `storage/postgres` for real ones, and both pass the suites in `storage/storagetest`. |
 | [`traverse`](traverse) | Walks the graph breadth-first, over any store. |
 | [`source`](source) | What a connector to an external system provides. `source/github` is the first. |
 | [`model`](model) | What the module needs from language models: an `Embedder` and a `Summarizer`. `model/inference` asks the two local services. |
-| [`ingest`](ingest) | Keeps the graph in step with its sources. |
+| [`ingest`](ingest) | Keeps the graph in step with its sources, and makes each document's edges from what its source said and the graph's rules. |
 | [`typesafe`](typesafe) | A client for Jev. |
 | [`retrieval`](retrieval) | The search. `retrieval/jev` is the judge built on Jev. |
 | [`internal/evaluation`](internal/evaluation) | Measures the search and its judge against the test set. |
@@ -595,6 +682,10 @@ set.
 - **A sync service.** The engine is here, and the example runs one pass of it.
   A long-running program that follows feeds, receives webhooks and reconciles
   on a schedule is yours to write for now.
+- **A frontend for rules and curation.** Kinds and rules are stored settings,
+  and the engine acts on a change to them, but so far only code can change
+  them. A web frontend for that, and for a team to correct the graph by hand,
+  is what is being built next.
 - **Document text.** The graph keeps summaries, not the text they were made
   from. An agent that needs an exact detail opens the document's URL.
 - **Tuned thresholds.** The search's thresholds and the judge's wording are

@@ -1,5 +1,6 @@
 // Package memory is the in-process storage backend: a Store, DocumentSearcher
-// and NeighborSearcher (store.go, search.go, neighbors.go) and a Ledger
+// and NeighborSearcher (store.go, search.go, neighbors.go), the Record and
+// Settings that go with a graph (record.go, settings.go) and a Ledger
 // (ledger.go), all kept in ordinary Go maps.
 //
 // It is meant for tests, examples and graphs small enough to rebuild at
@@ -18,9 +19,15 @@ import (
 	"github.com/umran/grafsol/storage"
 )
 
-// Store is an in-memory storage.Store and storage.DocumentSearcher. The zero
-// value is not usable; create one with New.
+// Store is an in-memory storage.Store and storage.DocumentSearcher. It also
+// keeps what goes with a graph: the storage.Record of what sources said, and
+// the storage.Settings the graph is made by. The zero value is not usable;
+// create one with New.
 type Store struct {
+	// PageSize is how many documents Recorded returns per page; zero means
+	// storage.DefaultPageSize. Edges takes its page size from each query.
+	PageSize int
+
 	mu       sync.RWMutex
 	vertices map[graph.ID]graph.Vertex
 
@@ -33,6 +40,14 @@ type Store struct {
 	// space is the embedding space claimed for the graph: "" until one is,
 	// and never changed after that.
 	space string
+
+	// said is what each document's source last said of it.
+	said map[graph.ID]storage.Said
+
+	// settings is the document last saved, and settingsVersion counts the
+	// saves.
+	settings        []byte
+	settingsVersion uint64
 }
 
 // arc is an edge as seen from one of its ends.
@@ -59,6 +74,7 @@ func New() *Store {
 		vertices: make(map[graph.ID]graph.Vertex),
 		out:      make(map[graph.ID][]arc),
 		in:       make(map[graph.ID][]arc),
+		said:     make(map[graph.ID]storage.Said),
 	}
 }
 

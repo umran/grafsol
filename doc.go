@@ -8,14 +8,21 @@
 // package can be read knowing only the ones above it.
 //
 //   - graph is the vocabulary: Document and Topic vertices, the Edge between
-//     them, and their IDs. Pure data, no I/O.
+//     them, their IDs, and the Reference and Label that a source reports of
+//     a document before anything has decided what they mean. Pure data, no
+//     I/O.
+//
+//   - mapping decides what those become: it holds the kinds of edge a team
+//     has defined, the rules that say which kind a reference is and which
+//     topic a label files a document under, and the Settings that keep both
+//     together. Pure as well: it reads and writes nothing.
 //
 //   - storage says what it takes to keep a graph: a Store for vertices and
 //     edges, a DocumentSearcher and a NeighborSearcher for finding things by
-//     similarity, and a Ledger for the sync engine's bookkeeping. Backends
-//     live beneath it: storage/memory for tests and small graphs,
-//     storage/postgres for real ones. Every backend passes the same suites
-//     in storage/storagetest.
+//     similarity, a Record of what each source said, the graph's Settings,
+//     and a Ledger for the sync engine's bookkeeping. Backends live beneath
+//     it: storage/memory for tests and small graphs, storage/postgres for
+//     real ones. Every backend passes the same suites in storage/storagetest.
 //
 //   - traverse walks the graph: breadth-first, exhaustively, over any Store.
 //
@@ -29,7 +36,9 @@
 //
 //   - ingest keeps the graph in step with its sources, and converges on
 //     the truth even when changes are lost, repeated or arrive out of order.
-//     Its enrichers are where summaries and embeddings get written.
+//     Its enrichers are where summaries and embeddings get written, and its
+//     Composer is where a document's edges are made: from what the source
+//     said and the graph's rules, again whenever either changes.
 //
 //   - typesafe is a client for Jev, the System One model that judges
 //     searches.
@@ -59,12 +68,22 @@
 // # The shape of the graph
 //
 // A vertex is a Document or a Topic. An edge runs from one vertex to
-// another and has a kind:
+// another and has a kind. The kinds are a team's to define; every graph
+// begins with these:
 //
-//	links_to     document -> document   the first references the second
-//	child_of     document -> document   the first sits under the second
-//	in_topic     document -> topic      the document belongs to the topic
-//	tagged_with  document -> topic      the document carries the topic as a tag
+//	links_to    document -> document   the first mentions the second
+//	child_of    document -> document   the first sits under the second
+//	resolves    document -> document   the first settles what the second asks for
+//	duplicates  document -> document   the first does what the second already does
+//	blocks      document -> document   the second waits on the first
+//	supersedes  document -> document   the first takes the place of the second
+//	in_topic    document -> topic      the document belongs to the topic
+//
+// A connector does not choose among them. It reports what a document points
+// at and the labels on it, and the graph's rules say what kind of edge each
+// becomes: "Fixes #38" a resolves edge, a label an in_topic edge. What was
+// reported is kept beside the graph, so a team can change its rules and have
+// every edge made again without a source being read a second time.
 //
 // Documents carry a summary and an embedding; edges and topics carry
 // summaries too. These are what a search uses to judge where to go next.

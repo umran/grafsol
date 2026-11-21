@@ -9,6 +9,12 @@
 // on the truth even when changes are lost, repeated or arrive out of order:
 // applying the newest change makes the document right, whatever came before.
 //
+// A connector also reports no more than its system says. A document points
+// at others and carries labels; what kind of edge each of those is in the
+// graph is not the connector's to decide. It reports references and labels
+// (Change.Mention, Change.Parent, Change.Label), and the graph's rules, which
+// a team can change, turn them into edges.
+//
 // Systems differ in how they let changes be observed, so a connector
 // implements whichever of three capabilities its system supports:
 //

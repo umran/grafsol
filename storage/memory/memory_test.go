@@ -40,3 +40,18 @@ func TestLedger(t *testing.T) {
 		return ledger
 	})
 }
+
+func TestRecord(t *testing.T) {
+	const pageSize = 3
+	storagetest.RunRecord(t, pageSize, func(*testing.T) storage.Record {
+		store := memory.New()
+		store.PageSize = pageSize
+		return store
+	})
+}
+
+func TestSettings(t *testing.T) {
+	storagetest.RunSettings(t, func(*testing.T) storage.Settings {
+		return memory.New()
+	})
+}

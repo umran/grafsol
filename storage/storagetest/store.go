@@ -201,17 +201,17 @@ func testEdgesOfOneKind(t *testing.T, store storage.Store, _ int) {
 	ab := graph.Edge{From: a, Kind: graph.LinksTo, To: b}
 	ac := graph.Edge{From: a, Kind: graph.LinksTo, To: c}
 	child := graph.Edge{From: a, Kind: graph.ChildOf, To: c}
-	tagged := graph.Edge{From: a, Kind: graph.TaggedWith, To: topic}
-	putEdges(t, store, ab, ac, child, tagged)
+	filed := graph.Edge{From: a, Kind: graph.InTopic, To: topic}
+	putEdges(t, store, ab, ac, child, filed)
 
 	out := func(kind graph.EdgeKind) []graph.Edge {
 		return listEdges(t, store, storage.EdgeQuery{Vertex: a, Direction: graph.Out, Kind: kind})
 	}
 	requireEdges(t, out(graph.LinksTo), ab, ac)
 	requireEdges(t, out(graph.ChildOf), child)
-	requireEdges(t, out(graph.TaggedWith), tagged)
-	requireEdges(t, out(graph.InTopic))
-	requireEdges(t, out(""), child, ab, ac, tagged)
+	requireEdges(t, out(graph.InTopic), filed)
+	requireEdges(t, out("supersedes")) // a kind that no edge here has
+	requireEdges(t, out(""), child, filed, ab, ac)
 
 	in := listEdges(t, store, storage.EdgeQuery{Vertex: c, Direction: graph.In, Kind: graph.ChildOf})
 	requireEdges(t, in, child)
@@ -443,7 +443,7 @@ func testAwkwardText(t *testing.T, store storage.Store, dimensions int) {
 	// Chain the awkward IDs together and hang them all off the topic.
 	var edges []graph.Edge
 	for i, id := range ids {
-		edges = append(edges, graph.Edge{From: id, Kind: graph.TaggedWith, To: topic.ID, Summary: awkward})
+		edges = append(edges, graph.Edge{From: id, Kind: graph.InTopic, To: topic.ID, Summary: awkward})
 		if i > 0 {
 			edges = append(edges, graph.Edge{From: ids[i-1], Kind: graph.LinksTo, To: id, Summary: awkward})
 		}
@@ -451,14 +451,14 @@ func testAwkwardText(t *testing.T, store storage.Store, dimensions int) {
 	putEdges(t, store, edges...)
 
 	// One edge per page, so that every awkward ID passes through a cursor.
-	tagged := listEdges(t, store, storage.EdgeQuery{Vertex: topic.ID, Direction: graph.In, Limit: 1})
-	var wantTagged []graph.Edge
+	filed := listEdges(t, store, storage.EdgeQuery{Vertex: topic.ID, Direction: graph.In, Limit: 1})
+	var wantFiled []graph.Edge
 	for _, e := range edges {
-		if e.Kind == graph.TaggedWith {
-			wantTagged = append(wantTagged, e)
+		if e.Kind == graph.InTopic {
+			wantFiled = append(wantFiled, e)
 		}
 	}
-	requireEdges(t, tagged, inListingOrder(wantTagged, graph.In)...)
+	requireEdges(t, filed, inListingOrder(wantFiled, graph.In)...)
 
 	for _, id := range ids {
 		var want []graph.Edge

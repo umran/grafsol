@@ -52,6 +52,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/umran/grafsol/ingest"
+	"github.com/umran/grafsol/mapping"
 	"github.com/umran/grafsol/model/inference"
 	"github.com/umran/grafsol/retrieval"
 	"github.com/umran/grafsol/retrieval/jev"
@@ -126,6 +127,20 @@ func run() error {
 		Sources:   []source.Source{repos},
 		Enrichers: []ingest.Enricher{ingest.Summarize(summarizer), ingest.Embed(embedder)},
 	})
+
+	// What each mention and label becomes in the graph is decided by rules,
+	// which a team can change. If they have changed since the last run, or
+	// this is the first run on a graph that was filled before there were
+	// rules, every document's edges are made again here from what is on
+	// record. GitHub is not read for that, and nothing is summarised.
+	remade, err := syncer.Composer().CatchUp(ctx)
+	if err != nil {
+		return err
+	}
+	if remade > 0 {
+		fmt.Printf("the rules have changed since the graph was last made by them: %d documents now have other edges\n", remade)
+	}
+
 	fmt.Printf("copying %s\n", named.sentence())
 	report, err := syncer.Reconcile(ctx, progress{Scanner: repos, out: os.Stdout, every: 10})
 	if err != nil {
@@ -145,12 +160,22 @@ func run() error {
 	if apiKey == "" {
 		return errors.New("TYPESAFE_API_KEY is not set, and a question needs Jev to judge the search")
 	}
+	// The judge is shown how each document was reached, in the words the
+	// graph's settings give each kind of edge.
+	document, _, err := store.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	settings, err := mapping.DecodeSettings(document)
+	if err != nil {
+		return err
+	}
 	engine := retrieval.NewEngine(retrieval.Config{
 		Store:     store,
 		Searcher:  store,
 		Neighbors: store,
 		Embedder:  embedder,
-		Judge:     jev.New(jev.Config{Client: typesafe.New(typesafe.Config{APIKey: apiKey})}),
+		Judge:     jev.New(jev.Config{Client: typesafe.New(typesafe.Config{APIKey: apiKey}), Phrase: settings.Phrase}),
 	})
 	// The judge is told which repositories the question is about.
 	setting := named.sentence() + " on GitHub."

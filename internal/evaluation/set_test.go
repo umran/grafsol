@@ -45,7 +45,7 @@ func exampleGraph() object {
 		},
 		"edges": []any{
 			object{"from": cache, "kind": "links_to", "to": slow, "summary": "This change caused the slowdown reported in the checkout issue."},
-			object{"from": slow, "kind": "tagged_with", "to": "topic:performance", "summary": ""},
+			object{"from": slow, "kind": "in_topic", "to": "topic:performance", "summary": ""},
 		},
 	}
 }

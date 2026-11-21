@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/umran/grafsol/graph"
+	"github.com/umran/grafsol/mapping"
 	"github.com/umran/grafsol/retrieval"
 	"github.com/umran/grafsol/typesafe"
 )
@@ -46,7 +47,7 @@ func TestAssessAsksJevExactlyThis(t *testing.T) {
 		[]retrieval.Lead{
 			{Target: slow, Estimate: 0.9}, // a seed
 			{Target: performance, From: slow, Estimate: 0.6,
-				Edge: graph.Edge{From: slow.ID, Kind: graph.TaggedWith, To: performance.ID, Summary: "labelled performance"}},
+				Edge: graph.Edge{From: slow.ID, Kind: graph.InTopic, To: performance.ID, Summary: "labelled performance"}},
 			{Target: bare, From: slow, Estimate: 0.2,
 				Edge: graph.Edge{From: bare.ID, Kind: graph.LinksTo, To: slow.ID}},
 		})
@@ -93,7 +94,7 @@ func TestAssessAsksJevExactlyThis(t *testing.T) {
 				"instructions": {
 					"question": "How much does `+"`candidate`"+` help to answer `+"`user_question`"+`?",
 					"candidate": {"kind": "topic", "name": "performance", "summary": "Speed and latency."},
-					"found": {"how": "the document \"Checkout is slow\" is tagged with this topic", "note": "labelled performance"}
+					"found": {"how": "the document \"Checkout is slow\" belongs to this topic", "note": "labelled performance"}
 				},
 				"criteria": [
 					"`+"`candidate`"+` has nothing to do with `+"`user_question`"+`.",
@@ -162,7 +163,11 @@ func TestAssessAsksOnlyWhatThereIsToAsk(t *testing.T) {
 	}
 }
 
+// The three kinds that were here before a team could define its own read
+// to Jev exactly as they did then. Its ratings were measured against these
+// words; changing one would change what it is asked.
 func TestRelationsReadAsSentences(t *testing.T) {
+	starter := mapping.DefaultSettings().Phrase
 	cases := []struct {
 		edge graph.Edge // between slow and the target
 		to   graph.Vertex
@@ -173,19 +178,75 @@ func TestRelationsReadAsSentences(t *testing.T) {
 		{graph.Edge{From: slow.ID, Kind: graph.ChildOf, To: cause.ID}, cause, `the document "Checkout is slow" is a part of it`},
 		{graph.Edge{From: cause.ID, Kind: graph.ChildOf, To: slow.ID}, cause, `it is a part of the document "Checkout is slow"`},
 		{graph.Edge{From: slow.ID, Kind: graph.InTopic, To: performance.ID}, performance, `the document "Checkout is slow" belongs to this topic`},
-		{graph.Edge{From: slow.ID, Kind: graph.TaggedWith, To: performance.ID}, performance, `the document "Checkout is slow" is tagged with this topic`},
+
+		// The kinds that came with rules.
+		{graph.Edge{From: slow.ID, Kind: mapping.Resolves, To: cause.ID}, cause, `the document "Checkout is slow" resolves it`},
+		{graph.Edge{From: cause.ID, Kind: mapping.Resolves, To: slow.ID}, cause, `it resolves the document "Checkout is slow"`},
+		{graph.Edge{From: cause.ID, Kind: mapping.Duplicates, To: slow.ID}, cause, `it duplicates the document "Checkout is slow"`},
+		{graph.Edge{From: slow.ID, Kind: mapping.Blocks, To: cause.ID}, cause, `the document "Checkout is slow" blocks it`},
+		{graph.Edge{From: cause.ID, Kind: mapping.Supersedes, To: slow.ID}, cause, `it supersedes the document "Checkout is slow"`},
+
+		// A kind nobody has given words to is named by its key.
 		{graph.Edge{From: slow.ID, Kind: "reviewed_by", To: cause.ID}, cause, `the document "Checkout is slow" has a "reviewed_by" edge to it`},
 		{graph.Edge{From: cause.ID, Kind: "reviewed_by", To: slow.ID}, cause, `it has a "reviewed_by" edge to the document "Checkout is slow"`},
+		{graph.Edge{From: slow.ID, Kind: "filed_under", To: performance.ID}, performance, `the document "Checkout is slow" has a "filed_under" edge to it`},
 	}
 	for _, c := range cases {
-		if got := relation(retrieval.Lead{Target: c.to, From: slow, Edge: c.edge}); got != c.want {
+		if got := relation(retrieval.Lead{Target: c.to, From: slow, Edge: c.edge}, starter); got != c.want {
 			t.Errorf("the edge %+v reads as %q, want %q", c.edge, got, c.want)
 		}
 	}
 	// And seen from a topic, towards one of its documents.
 	fromTopic := retrieval.Lead{Target: cause, From: performance, Edge: graph.Edge{From: cause.ID, Kind: graph.InTopic, To: performance.ID}}
-	if got, want := relation(fromTopic), `it belongs to the topic "performance"`; got != want {
+	if got, want := relation(fromTopic, starter), `it belongs to the topic "performance"`; got != want {
 		t.Errorf("a document reached from its topic reads as %q, want %q", got, want)
+	}
+}
+
+// A team defines kinds of its own and rewords the ones it was given. Jev is
+// shown the team's words.
+func TestTheJudgeUsesTheWordsItIsGiven(t *testing.T) {
+	api := newFakeJev(t)
+	api.answer = func(string) string {
+		return `{"type": "score", "score": 1.0, "confidence": 0.9, "legend": {}, "probabilities": {"0": 0, "1": 1, "2": 0}}`
+	}
+	words := map[graph.EdgeKind]string{"depends_on": "cannot go ahead without", graph.LinksTo: "mentions", "owned_by": "is owned by"}
+	judge := New(Config{
+		Client: typesafe.New(typesafe.Config{APIKey: "test-key", BaseURL: api.server.URL, MaxRetries: -1}),
+		Phrase: func(kind graph.EdgeKind) string { return words[kind] },
+	})
+
+	leads := []retrieval.Lead{
+		{Target: cause, From: slow, Edge: graph.Edge{From: cause.ID, Kind: "depends_on", To: slow.ID}},
+		{Target: cause, From: slow, Edge: graph.Edge{From: slow.ID, Kind: graph.LinksTo, To: cause.ID}},
+		{Target: performance, From: slow, Edge: graph.Edge{From: slow.ID, Kind: "owned_by", To: performance.ID}},
+		// The team has given this one no words, though every graph begins
+		// with some for it: the team's word is the last.
+		{Target: cause, From: slow, Edge: graph.Edge{From: cause.ID, Kind: graph.ChildOf, To: slow.ID}},
+	}
+	if _, err := judge.Assess(t.Context(), retrieval.Question{Text: "Why is checkout slow?"}, nil, leads); err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+
+	var sent struct {
+		Questions map[string]struct {
+			Instructions struct {
+				Found struct{ How string }
+			}
+		}
+	}
+	if err := json.Unmarshal(api.only().raw, &sent); err != nil {
+		t.Fatalf("reading what was sent: %v", err)
+	}
+	for i, want := range []string{
+		`it cannot go ahead without the document "Checkout is slow"`,
+		`the document "Checkout is slow" mentions it`,
+		`the document "Checkout is slow" is owned by this topic`,
+		`it has a "child_of" edge to the document "Checkout is slow"`,
+	} {
+		if got := sent.Questions[leadName(i)].Instructions.Found.How; got != want {
+			t.Errorf("lead %d was described to Jev as %q, want %q", i, got, want)
+		}
 	}
 }
 

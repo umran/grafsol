@@ -131,7 +131,7 @@ func TestCloneSharesNoMemory(t *testing.T) {
 }
 
 func TestEdgeKindValidate(t *testing.T) {
-	for _, kind := range []graph.EdgeKind{graph.LinksTo, graph.ChildOf, graph.InTopic, graph.TaggedWith, "blocks", "relates_to_2"} {
+	for _, kind := range []graph.EdgeKind{graph.LinksTo, graph.ChildOf, graph.InTopic, "blocks", "relates_to_2"} {
 		if err := kind.Validate(); err != nil {
 			t.Errorf("Validate(%q) = %v, want nil", kind, err)
 		}
@@ -212,5 +212,42 @@ func TestDirection(t *testing.T) {
 	}
 	if err := graph.Direction(0).Validate(); err == nil {
 		t.Errorf("Direction(0).Validate() = nil, want an error")
+	}
+}
+
+func TestReferenceValidate(t *testing.T) {
+	valid := []graph.Reference{
+		{Target: "doc:github:acme/api#42", Form: graph.FormMention, Written: "#42", Context: "see #42"},
+		{URL: "https://example.com/x", Form: graph.FormMention},
+		{Target: "doc:github:acme/api#7", Form: graph.FormParent, Context: "sub-issue of"},
+		{Target: "doc:jira:PAY-7", Form: "jira:blocks"},
+		// An address, and the document the sync engine found it to be.
+		{Target: "doc:jira:PAY-7", URL: "https://acme.atlassian.net/browse/PAY-7", Form: graph.FormMention},
+	}
+	for _, reference := range valid {
+		if err := reference.Validate(); err != nil {
+			t.Errorf("%+v: %v", reference, err)
+		}
+	}
+
+	invalid := map[string]graph.Reference{
+		"neither a target nor a URL":   {Form: graph.FormMention},
+		"no form":                      {Target: "doc:github:acme/api#42"},
+		"a malformed target":           {Target: "acme/api#42", Form: graph.FormMention},
+		"a malformed target and a URL": {Target: "acme/api#42", URL: "https://example.com/x", Form: graph.FormMention},
+	}
+	for name, reference := range invalid {
+		if err := reference.Validate(); err == nil {
+			t.Errorf("%s was accepted: %+v", name, reference)
+		}
+	}
+}
+
+func TestLabelValidate(t *testing.T) {
+	if err := (graph.Label{Name: "bug", Description: "Something is broken"}).Validate(); err != nil {
+		t.Error(err)
+	}
+	if err := (graph.Label{Description: "a label with no name"}).Validate(); err == nil {
+		t.Error("a label with no name was accepted")
 	}
 }

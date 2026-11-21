@@ -31,7 +31,7 @@ const (
 	// issue, a pull request, a ticket, a wiki page.
 	KindDocument VertexKind = "doc"
 
-	// KindTopic is a subject that documents can belong to or be tagged with.
+	// KindTopic is a subject that documents can belong to.
 	KindTopic VertexKind = "topic"
 )
 

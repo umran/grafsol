@@ -1,9 +1,12 @@
 // Package storage defines what the rest of the module needs from the place
-// where the graph is kept. There are four contracts:
+// where the graph is kept. There are six contracts:
 //
 //   - Store keeps vertices and edges.
 //   - DocumentSearcher finds documents by embedding similarity.
 //   - NeighborSearcher reads the neighbours of a vertex, most similar first.
+//   - Record keeps what the source of each document said of it, which is
+//     what the document's edges are made from.
+//   - Settings keeps the one document that says how a team's graph is made.
 //   - Ledger keeps the sync engine's bookkeeping, apart from the graph.
 //
 // The contracts are small and shaped like the graph rather than like any one

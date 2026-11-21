@@ -24,8 +24,8 @@ func TestSummarizeAndEmbedFillInADocumentAndItsTopics(t *testing.T) {
 	store, syncer := enrichingSyncer(t, nil, ingest.Summarize(summarizer), ingest.Embed(embedder))
 
 	change := issue("42", 1)
-	change.Tag("Billing", "Invoices, refunds and payment providers.")
-	change.Tag("Urgent", "")
+	change.Label("Billing", "Invoices, refunds and payment providers.")
+	change.Label("Urgent", "")
 	if _, err := syncer.Apply(t.Context(), change); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -34,16 +34,28 @@ func TestSummarizeAndEmbedFillInADocumentAndItsTopics(t *testing.T) {
 	if got := summarizer.asked; len(got) != 1 || got[0] != "issue 42 at version 1|body of issue 42 at version 1" {
 		t.Errorf("the summarizer was asked for %q", got)
 	}
-	// The embedder was called once, for the document and both topics, and
-	// given what the graph keeps of each: title and summary, name and
-	// summary. The summary it embedded is the one just written.
+	// The embedder was called twice, and given what the graph keeps of
+	// each thing: title and summary, name and summary. Embed called it for
+	// the document, whose summary had just been written. Then the Syncer
+	// called it for the two topics that the labels made, as it created them.
 	want := []string{
 		"issue 42 at version 1\n\nsummary of issue 42 at version 1",
 		"Billing\n\nInvoices, refunds and payment providers.",
 		"Urgent",
 	}
-	if len(embedder.calls) != 1 || !slices.Equal(embedder.calls[0], want) {
-		t.Errorf("the embedder was called with\n  %q\nwant one call with\n  %q", embedder.calls, want)
+	if len(embedder.calls) != 2 || !slices.Equal(embedder.calls[0], want[:1]) || !slices.Equal(embedder.calls[1], want[1:]) {
+		t.Errorf("the embedder was called with\n  %q\nwant one call with the first and one with the rest of\n  %q", embedder.calls, want)
+	}
+
+	// A topic is embedded when it is created, and not again each time a
+	// document is filed under it.
+	second := issue("43", 1)
+	second.Label("Billing", "Invoices, refunds and payment providers.")
+	if _, err := syncer.Apply(t.Context(), second); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(embedder.calls) != 3 || len(embedder.calls[2]) != 1 {
+		t.Errorf("for a second document under a topic that exists, the embedder was called with %q, want the document alone", embedder.calls[2:])
 	}
 
 	stored, err := store.GetVertices(t.Context(), []graph.ID{doc("42"), graph.TopicID("Billing"), graph.TopicID("Urgent")})
@@ -58,6 +70,28 @@ func TestSummarizeAndEmbedFillInADocumentAndItsTopics(t *testing.T) {
 		if topic := stored[id].(*graph.Topic); !slices.Equal(topic.Embedding, vectorOf(want[i+1])) {
 			t.Errorf("topic %s was stored with embedding %v", id, topic.Embedding)
 		}
+	}
+}
+
+// A source that states an edge to a topic outright describes the topic on
+// the change, and Embed embeds it there, with the document, in one call.
+func TestEmbedEmbedsTheTopicsAChangeDescribes(t *testing.T) {
+	embedder := &fakeEmbedder{}
+	store, syncer := enrichingSyncer(t, nil, ingest.Embed(embedder))
+
+	change := issue("42", 1)
+	stateTopic(&change, "Billing", "Invoices, refunds and payment providers.")
+	if _, err := syncer.Apply(t.Context(), change); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	want := []string{"issue 42 at version 1", "Billing\n\nInvoices, refunds and payment providers."}
+	if len(embedder.calls) != 1 || !slices.Equal(embedder.calls[0], want) {
+		t.Errorf("the embedder was called with\n  %q\nwant one call with\n  %q", embedder.calls, want)
+	}
+	stored, _ := store.GetVertices(t.Context(), []graph.ID{graph.TopicID("Billing")})
+	if topic := stored[graph.TopicID("Billing")].(*graph.Topic); !slices.Equal(topic.Embedding, vectorOf(want[1])) {
+		t.Errorf("the topic was stored with embedding %v", topic.Embedding)
 	}
 }
 
@@ -113,16 +147,19 @@ func TestEmbedLeavesAloneWhatIsAlreadyEmbedded(t *testing.T) {
 	change.Document.Embedding = []float32{9, 9, 9}
 	change.Topics = []graph.Topic{{ID: graph.TopicID("billing"), Name: "Billing", Embedding: []float32{8, 8, 8}}}
 	change.EmbeddingSpace = testSpace
-	change.Edges = []graph.Edge{{From: doc("1"), Kind: graph.TaggedWith, To: graph.TopicID("billing")}}
+	change.Edges = []graph.Edge{{From: doc("1"), Kind: graph.InTopic, To: graph.TopicID("billing")}}
 	if _, err := syncer.Apply(t.Context(), change); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(embedder.calls) != 0 {
 		t.Errorf("the embedder was called with %q although nothing lacked an embedding", embedder.calls)
 	}
-	stored, _ := store.GetVertices(t.Context(), []graph.ID{doc("1")})
+	stored, _ := store.GetVertices(t.Context(), []graph.ID{doc("1"), graph.TopicID("billing")})
 	if got := stored[doc("1")].(*graph.Document).Embedding; !slices.Equal(got, []float32{9, 9, 9}) {
 		t.Errorf("the source's embedding was replaced by %v", got)
+	}
+	if got := stored[graph.TopicID("billing")].(*graph.Topic).Embedding; !slices.Equal(got, []float32{8, 8, 8}) {
+		t.Errorf("the topic was stored with the embedding %v, want the one its source gave it", got)
 	}
 }
 
@@ -185,13 +222,21 @@ func TestEmbedRefusesAnEmbedderThatMiscounts(t *testing.T) {
 	_, syncer := enrichingSyncer(t, nil, ingest.Embed(&fakeEmbedder{drop: 1}))
 
 	change := issue("42", 1)
-	change.Tag("Billing", "")
+	stateTopic(&change, "Billing", "")
 	if _, err := syncer.Apply(t.Context(), change); err == nil {
 		t.Errorf("one vector for two texts was accepted")
 	}
 }
 
 // --- helpers ----------------------------------------------------------------
+
+// stateTopic makes a change state outright that its document belongs to a
+// topic, and describe the topic, as a source that knows as much would.
+func stateTopic(c *source.Change, name, summary string) {
+	topic := graph.Topic{ID: graph.TopicID(name), Name: name, Summary: summary}
+	c.Topics = append(c.Topics, topic)
+	c.Edges = append(c.Edges, graph.Edge{From: c.Document.ID, Kind: graph.InTopic, To: topic.ID})
+}
 
 // enrichingSyncer returns a Syncer over in-memory storage that runs the
 // given enrichers, with the store it writes to. Its log goes to log, if
@@ -308,8 +353,8 @@ func TestADocumentEmbeddedInAnotherSpaceIsNotStored(t *testing.T) {
 	}
 
 	change := issue("2", 1)
-	change.LinkTo(doc("1"), "see #1")
-	change.Tag("bug", "Defects in shipped behaviour.")
+	mention(&change, "1", "see #1")
+	change.Label("bug", "Defects in shipped behaviour.")
 	_, err := second.Apply(t.Context(), change)
 
 	if !errors.Is(err, storage.ErrOtherSpace) {
@@ -334,6 +379,9 @@ func TestADocumentEmbeddedInAnotherSpaceIsNotStored(t *testing.T) {
 	if _, known, _ := ledger.Mark(t.Context(), doc("2")); known {
 		t.Error("the refused change was recorded in the ledger, so it would never be tried again")
 	}
+	if said, _ := store.Said(t.Context(), []graph.ID{doc("2")}); len(said) != 0 {
+		t.Errorf("what the refused change said was put on record: %+v", said)
+	}
 
 	// The graph is where it was, and the first program is not disturbed.
 	if space, _ := store.EmbeddingSpace(t.Context()); space != testSpace {
@@ -351,7 +399,7 @@ func TestAChangeMustSayWhatSpaceItsEmbeddingsAreIn(t *testing.T) {
 		"the document's": func(c *source.Change) { c.Document.Embedding = []float32{1, 2, 3} },
 		"a topic's": func(c *source.Change) {
 			c.Topics = []graph.Topic{{ID: graph.TopicID("billing"), Name: "Billing", Embedding: []float32{1, 2, 3}}}
-			c.Edges = []graph.Edge{{From: c.Document.ID, Kind: graph.TaggedWith, To: graph.TopicID("billing")}}
+			c.Edges = []graph.Edge{{From: c.Document.ID, Kind: graph.InTopic, To: graph.TopicID("billing")}}
 		},
 	}
 
@@ -389,35 +437,59 @@ func TestAChangeMustSayWhatSpaceItsEmbeddingsAreIn(t *testing.T) {
 }
 
 // The source embedded the document itself. Its topic still needs an
-// embedding, and the enricher's embedder is in another space: the one
-// change cannot hold embeddings from both.
+// embedding, and the embedder is in another space: one document cannot
+// bring embeddings from both into the graph. That holds whichever way the
+// topic comes about: stated on the change, where Embed would embed it, or
+// made of a label, where the Syncer would as it creates the topic.
 func TestEmbedDoesNotAddToEmbeddingsFromAnotherSpace(t *testing.T) {
-	embedder := &fakeEmbedder{}
-	store, syncer := enrichingSyncer(t, nil, ingest.Embed(embedder))
-	change := issue("1", 1)
-	change.Document.Embedding = []float32{9, 9, 9}
-	change.EmbeddingSpace = otherSpace
-	change.Tag("billing", "Invoices and refunds.")
+	topics := map[string]func(c *source.Change){
+		"a topic the change describes": func(c *source.Change) { stateTopic(c, "billing", "Invoices and refunds.") },
+		"a topic made of a label":      func(c *source.Change) { c.Label("billing", "Invoices and refunds.") },
+	}
+	for name, add := range topics {
+		t.Run(name, func(t *testing.T) {
+			embedder := &fakeEmbedder{}
+			store, syncer := enrichingSyncer(t, nil, ingest.Embed(embedder))
+			change := issue("1", 1)
+			change.Document.Embedding = []float32{9, 9, 9}
+			change.EmbeddingSpace = otherSpace
+			add(&change)
 
-	_, err := syncer.Apply(t.Context(), change)
+			_, err := syncer.Apply(t.Context(), change)
 
-	if !errors.Is(err, storage.ErrOtherSpace) {
-		t.Fatalf("Apply returned %v, want an error that wraps storage.ErrOtherSpace", err)
-	}
-	if len(embedder.calls) != 0 {
-		t.Errorf("the embedder was asked to embed %q all the same", embedder.calls)
-	}
-	if stored, _ := store.GetVertices(t.Context(), []graph.ID{doc("1"), graph.TopicID("billing")}); len(stored) != 0 {
-		t.Errorf("the change left %d vertices behind", len(stored))
-	}
+			if !errors.Is(err, storage.ErrOtherSpace) {
+				t.Fatalf("Apply returned %v, want an error that wraps storage.ErrOtherSpace", err)
+			}
+			if len(embedder.calls) != 0 {
+				t.Errorf("the embedder was asked to embed %q all the same", embedder.calls)
+			}
+			if stored, _ := store.GetVertices(t.Context(), []graph.ID{doc("1"), graph.TopicID("billing")}); len(stored) != 0 {
+				t.Errorf("the change left %d vertices behind", len(stored))
+			}
+			if said, _ := store.Said(t.Context(), []graph.ID{doc("1")}); len(said) != 0 {
+				t.Errorf("the change was put on record: %+v", said)
+			}
+			if space, _ := store.EmbeddingSpace(t.Context()); space != "" {
+				t.Errorf("the change that was refused claimed the graph for %q", space)
+			}
 
-	// In its own space the source's embedding is kept and the topic's added.
-	change.EmbeddingSpace = testSpace
-	if _, err := syncer.Apply(t.Context(), change); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if len(embedder.calls) != 1 || len(embedder.calls[0]) != 1 {
-		t.Errorf("the embedder was asked for %q, want the topic alone", embedder.calls)
+			// In its own space the source's embedding is kept and the
+			// topic's added.
+			change.EmbeddingSpace = testSpace
+			if _, err := syncer.Apply(t.Context(), change); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(embedder.calls) != 1 || len(embedder.calls[0]) != 1 {
+				t.Errorf("the embedder was asked for %q, want the topic alone", embedder.calls)
+			}
+			stored, _ := store.GetVertices(t.Context(), []graph.ID{doc("1"), graph.TopicID("billing")})
+			if got := stored[doc("1")].(*graph.Document).Embedding; !slices.Equal(got, []float32{9, 9, 9}) {
+				t.Errorf("the source's embedding was replaced by %v", got)
+			}
+			if got := stored[graph.TopicID("billing")].(*graph.Topic).Embedding; !slices.Equal(got, vectorOf("billing\n\nInvoices and refunds.")) {
+				t.Errorf("the topic was stored with the embedding %v", got)
+			}
+		})
 	}
 }
 
@@ -484,14 +556,16 @@ func TestReconcileCountsTheDocumentsStoredWithoutSomethingAModelRefused(t *testi
 }
 
 // A document stored before changes said which embedding space their
-// embeddings are in must not look changed now. Its fingerprint is what it
-// was, so nothing is synced again on account of the new field.
+// embeddings are in, and before sources reported mentions and labels in
+// place of the edges they used to make of them, must not look changed now.
+// The hash in its fingerprint is what it was, so nothing is synced again on
+// account of either.
 func TestTheFingerprintOfADocumentAlreadyStoredIsWhatItWas(t *testing.T) {
 	ledger := memory.NewLedger()
 	syncer := ingest.NewSyncer(ingest.Config{Store: memory.New(), Ledger: ledger})
 	change := issue("42", 1)
-	change.LinkTo(doc("7"), "see #7")
-	change.Tag("bug", "Defects in shipped behaviour.")
+	mention(&change, "7", "see #7")
+	change.Label("bug", "Defects in shipped behaviour.")
 	if _, err := syncer.Apply(t.Context(), change); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -500,9 +574,18 @@ func TestTheFingerprintOfADocumentAlreadyStoredIsWhatItWas(t *testing.T) {
 	if err != nil || !known {
 		t.Fatalf("Mark: %v, %v", known, err)
 	}
-	// Computed by the code as it stood before the field was added.
+	// Computed by the code as it stood before either, from a links_to edge
+	// with the summary "see #7" and a tagged_with edge to the topic "bug".
 	const before = "b79c2a57d5453b106025101813cd53b0acbf8115577ce391eedd299e27d5310c"
-	if mark.Fingerprint != before {
-		t.Errorf("the fingerprint is now %s, and it was %s", mark.Fingerprint, before)
+	if hash := hashOf(mark); hash != before {
+		t.Errorf("the hash in the fingerprint is now %s, and it was %s", hash, before)
 	}
+}
+
+// hashOf returns the hash in a mark's fingerprint: the fingerprint itself in
+// a mark from before what sources say was kept on record, and what stands
+// before the note that it was kept in a mark made since.
+func hashOf(mark storage.Mark) string {
+	hash, _, _ := strings.Cut(mark.Fingerprint, "+")
+	return hash
 }

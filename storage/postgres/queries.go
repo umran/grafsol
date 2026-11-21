@@ -189,6 +189,103 @@ select direction, kind, neighbor, summary, vertex_kind, attrs, distance
  limit $7`
 )
 
+// --- what sources said --------------------------------------------------------
+
+const (
+	// upsertSaid stores what was said of one document. As with a vertex, a
+	// row that already holds exactly this is left as it is.
+	upsertSaid = `
+insert into said (document, body)
+values ($1, $2)
+on conflict (document) do update
+   set body = excluded.body
+ where said.body is distinct from excluded.body`
+
+	deleteSaid = `
+delete from said
+ where document = $1`
+
+	selectSaid = `
+select document, body
+  from said
+ where document = any($1)`
+
+	// recordedDocuments pages through the documents that have a row, in ID
+	// order. $1 is where the previous page ended; the first page passes an
+	// empty string, which sorts before everything. It reads the primary key.
+	recordedDocuments = `
+select document
+  from said
+ where document > $1
+ order by document
+ limit $2`
+)
+
+// --- the settings -------------------------------------------------------------
+
+const (
+	selectSettings = `
+select version, document
+  from settings`
+
+	// saveSettings replaces the document if, and only if, the version stored
+	// is still $2, and returns the new version. A save made from any other
+	// version matches no row and returns none.
+	//
+	// Two saves made from the same version cannot both go through: the
+	// second waits for the first to commit, then finds the version moved on.
+	saveSettings = `
+update settings
+   set version = version + 1,
+       document = $1
+ where version = $2
+returning version`
+)
+
+// --- upgrades ---------------------------------------------------------------
+
+const (
+	selectUpgrades = `
+select upgrade
+  from schema_upgrades`
+
+	insertUpgrade = `
+insert into schema_upgrades (upgrade, name)
+values ($1, $2)`
+
+	// documentsAfter pages through every document in ID order, for the
+	// upgrade that writes down what the sources of an older graph said.
+	documentsAfter = `
+select id, kind, attrs
+  from vertices
+ where kind = 'doc' and id > $1
+ order by id
+ limit $2`
+
+	// insertSaidWhereMissing writes what was said of many documents in one
+	// statement, leaving alone any document that already has a row. The two
+	// arrays are columns of the batch.
+	insertSaidWhereMissing = `
+insert into said (document, body)
+select document, body::jsonb
+  from unnest($1::text[], $2::text[]) as carried (document, body)
+on conflict (document) do nothing`
+
+	// copyTaggedWithToInTopic and deleteTaggedWith, run one after the other,
+	// retype the edges that labels used to make. Where a document already
+	// had an in_topic edge to the same topic, that edge stays as it is.
+	copyTaggedWithToInTopic = `
+insert into edges (src, kind, dst, summary)
+select src, 'in_topic', dst, summary
+  from edges
+ where kind = 'tagged_with'
+on conflict (src, kind, dst) do nothing`
+
+	deleteTaggedWith = `
+delete from edges
+ where kind = 'tagged_with'`
+)
+
 // --- ledger -----------------------------------------------------------------
 
 const (

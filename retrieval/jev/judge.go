@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/umran/grafsol/graph"
+	"github.com/umran/grafsol/mapping"
 	"github.com/umran/grafsol/retrieval"
 	"github.com/umran/grafsol/typesafe"
 )
@@ -43,12 +45,25 @@ type Config struct {
 	// alias that moves when a new Jev is released. Once the thresholds in
 	// retrieval.Config have been tuned against one version, name it here.
 	Model string
+
+	// Phrase gives the words Jev is shown for a kind of edge, read from the
+	// edge's From to its To: "resolves", "is a part of". A lead that was
+	// reached along a resolves edge is then described as "it resolves X" or
+	// "X resolves it". For a kind it has no words for it returns "", and
+	// Jev is shown the kind's key instead.
+	//
+	// The kinds are a team's to define (mapping.Kind), so a program that
+	// serves a team's graph passes the Phrase of the graph's settings here.
+	// Nil means the words of the kinds every graph begins with. Phrase is
+	// called once for each lead judged, from several goroutines.
+	Phrase func(kind graph.EdgeKind) string
 }
 
 // Judge is a retrieval.Judge. It is safe for concurrent use.
 type Judge struct {
 	client *typesafe.Client
 	model  string
+	phrase func(kind graph.EdgeKind) string
 }
 
 var _ retrieval.Judge = (*Judge)(nil)
@@ -59,7 +74,11 @@ func New(cfg Config) *Judge {
 	if cfg.Client == nil {
 		panic("jev: Config.Client is required")
 	}
-	return &Judge{client: cfg.Client, model: cmp.Or(cfg.Model, typesafe.DefaultModel)}
+	phrase := cfg.Phrase
+	if phrase == nil {
+		phrase = mapping.DefaultSettings().Phrase
+	}
+	return &Judge{client: cfg.Client, model: cmp.Or(cfg.Model, typesafe.DefaultModel), phrase: phrase}
 }
 
 // Jev reads at most 64,000 tokens in one request (the state and all the
@@ -111,7 +130,7 @@ func (j *Judge) Assess(ctx context.Context, q retrieval.Question, evidence []ret
 		asked = append(asked, sufficiency)
 	}
 	for i, lead := range leads {
-		rating := question{name: leadName(i), content: leadQuestion(lead)}
+		rating := question{name: leadName(i), content: leadQuestion(lead, j.phrase)}
 		rating.size = tokens(rating.content)
 		if stateSize+rating.size > questionBudget {
 			return retrieval.Assessment{}, fmt.Errorf("jev: the lead to %s comes to about %d tokens, more than can be judged",

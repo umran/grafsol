@@ -9,6 +9,7 @@ import (
 
 	"github.com/umran/grafsol/graph"
 	"github.com/umran/grafsol/ingest"
+	"github.com/umran/grafsol/mapping"
 	"github.com/umran/grafsol/source"
 	"github.com/umran/grafsol/storage"
 )
@@ -69,6 +70,129 @@ func Converge(t *testing.T, store storage.Store, ledger storage.Ledger, seed uin
 	}
 	if report.Applied != 0 || report.Removed != 0 {
 		t.Errorf("seed %d: a graph already in step was changed again: %+v", seed, report)
+	}
+}
+
+// ConvergeAsRulesChange is Converge with a team that keeps changing its
+// mind. While each round's changes are being delivered, the settings the
+// graph is made by are saved anew (other rules, other topics merged) and
+// caught up with, so that documents are being applied under one set of
+// rules while others are composed again under the next.
+//
+// When it is all over, and the graph has been caught up with the settings
+// that were saved last, it must mirror the World as those settings make it:
+// no edge left over from any earlier set of rules.
+//
+// store has to keep the graph's settings too, as the stores in this module
+// do.
+func ConvergeAsRulesChange(t *testing.T, store storage.Store, ledger storage.Ledger, seed uint64, opts Options) {
+	t.Helper()
+	rounds, changes, workers := orDefault(opts.Rounds, 4), orDefault(opts.Changes, 150), orDefault(opts.Workers, 8)
+	settings, keepsThem := store.(storage.Settings)
+	if !keepsThem {
+		t.Fatalf("%T does not keep the graph's settings", store)
+	}
+
+	world := NewWorld("world", seed)
+	world.Restores = true
+	random := rand.New(rand.NewPCG(seed, 31))
+	syncer := ingest.NewSyncer(ingest.Config{Store: store, Ledger: ledger, Sources: []source.Source{world}})
+	composer := syncer.Composer()
+	ctx := t.Context()
+
+	delivered := 0
+	for round := range rounds {
+		world.Mutate(changes)
+		history := world.History()
+		deliveries := mangle(random, history[delivered:])
+		delivered = len(history)
+
+		// The rules change while this round's deliveries are being applied.
+		// The last round always changes them, so that the run ends under
+		// rules other than the ones most of it was made by.
+		var mindChanged sync.WaitGroup
+		if round == rounds-1 || random.IntN(2) == 0 {
+			next := teamSettings(1 + (int(seed)+round)%3)
+			mindChanged.Go(func() {
+				save(t, settings, next)
+				if _, err := composer.CatchUp(ctx); err != nil {
+					t.Errorf("seed %d: CatchUp while changes arrive: %v", seed, err)
+				}
+			})
+		}
+		deliver(t, ctx, syncer, deliveries, workers)
+		mindChanged.Wait()
+
+		if round%2 == 0 && round < rounds-1 {
+			if _, err := syncer.Reconcile(ctx, world); err != nil {
+				t.Fatalf("seed %d: Reconcile between rounds: %v", seed, err)
+			}
+		}
+	}
+
+	if _, err := composer.CatchUp(ctx); err != nil {
+		t.Fatalf("seed %d: the final CatchUp: %v", seed, err)
+	}
+	for pass := range 2 {
+		if _, err := syncer.Reconcile(ctx, world); err != nil {
+			t.Fatalf("seed %d: final Reconcile pass %d: %v", seed, pass+1, err)
+		}
+	}
+	RequireMirror(t, store, world)
+
+	// With the graph in step and caught up, neither has anything left to do.
+	remade, err := composer.CatchUp(ctx)
+	if err != nil || remade != 0 {
+		t.Errorf("seed %d: a graph already caught up had %d documents made again (error %v)", seed, remade, err)
+	}
+	report, err := syncer.Reconcile(ctx, world)
+	if err != nil {
+		t.Fatalf("seed %d: Reconcile of a graph already in step: %v", seed, err)
+	}
+	if report.Applied != 0 || report.Removed != 0 {
+		t.Errorf("seed %d: a graph already in step was changed again: %+v", seed, report)
+	}
+}
+
+// teamSettings returns one of a few sets of settings that each make
+// something else of what a World says: its mentions, its parents, its
+// labels, and the topics those labels name.
+func teamSettings(which int) mapping.Settings {
+	settings := mapping.DefaultSettings()
+	switch which {
+	case 1:
+		settings.Rules = mapping.Rules{
+			{ID: "mentions-resolve", Source: "world", Form: graph.FormMention, After: []string{"mentions"}, Kind: mapping.Resolves},
+			{ID: "no-bugs", Form: mapping.FormLabel, Label: "bug", Ignore: true},
+		}
+	case 2:
+		settings.Rules = mapping.Rules{
+			{ID: "parents-block", Form: graph.FormParent, Kind: mapping.Blocks},
+			{ID: "docs", Form: mapping.FormLabel, Label: "docs", Topic: "Documentation"},
+		}
+		settings.Aliases = map[graph.ID]graph.ID{graph.TopicID("billing"): graph.TopicID("money")}
+	case 3:
+		settings.Rules = mapping.Rules{{ID: "quiet", Form: graph.FormMention, Ignore: true}}
+		settings.Aliases = map[graph.ID]graph.ID{graph.TopicID("urgent"): graph.TopicID("bug")}
+	}
+	return settings
+}
+
+// save stores settings in place of whatever is stored.
+func save(t *testing.T, settings storage.Settings, next mapping.Settings) {
+	t.Helper()
+	document, err := next.Encode()
+	if err != nil {
+		t.Errorf("encoding the settings: %v", err)
+		return
+	}
+	_, version, err := settings.Settings(t.Context())
+	if err != nil {
+		t.Errorf("Settings: %v", err)
+		return
+	}
+	if _, err := settings.SaveSettings(t.Context(), document, version); err != nil {
+		t.Errorf("SaveSettings: %v", err)
 	}
 }
 
@@ -154,14 +278,16 @@ func deliver(t *testing.T, ctx context.Context, syncer *ingest.Syncer, changes [
 }
 
 // RequireMirror fails the test unless the graph holds exactly what the
-// world holds: every living document with its fields and precisely its
-// edges, every topic those edges point at, and no trace of the documents
-// that have been removed.
+// world holds: every living document with its fields and precisely the
+// edges that the graph's settings make of what the world says of it, every
+// topic those edges point at, and no trace of the documents that have been
+// removed.
 func RequireMirror(t *testing.T, store storage.Store, world *World) {
 	t.Helper()
 	ctx := t.Context()
 	live := world.Live()
 	ever := world.Ever()
+	settings := settingsOf(t, store)
 
 	stored, err := store.GetVertices(ctx, ever)
 	if err != nil {
@@ -203,7 +329,7 @@ func RequireMirror(t *testing.T, store storage.Store, world *World) {
 			problem("%s differs\n graph: %+v\n world: %+v", id, vertex, change.Document)
 		}
 
-		want := slices.SortedFunc(slices.Values(change.Edges), graph.Edge.Compare)
+		want := edgesUnder(settings, change)
 		if !slices.Equal(edges, want) {
 			problem("the edges of %s differ\n graph: %v\n world: %v", id, edges, want)
 		}
@@ -231,6 +357,49 @@ func RequireMirror(t *testing.T, store storage.Store, world *World) {
 	if len(live) == 0 || len(live) == len(ever) {
 		t.Fatalf("the run was too tame to prove anything: %d documents ever, %d living", len(ever), len(live))
 	}
+}
+
+// settingsOf returns the settings a graph is made by: what its store keeps,
+// or the settings every graph begins with if the store keeps none.
+func settingsOf(t *testing.T, store storage.Store) mapping.Settings {
+	t.Helper()
+	keeper, keepsThem := store.(storage.Settings)
+	if !keepsThem {
+		return mapping.DefaultSettings()
+	}
+	document, _, err := keeper.Settings(t.Context())
+	if err != nil {
+		t.Fatalf("Settings: %v", err)
+	}
+	settings, err := mapping.DecodeSettings(document)
+	if err != nil {
+		t.Fatalf("DecodeSettings: %v", err)
+	}
+	return settings
+}
+
+// edgesUnder says, apart from the code under test, which edges a document
+// should have: those its source stated, and those the settings make of its
+// references and labels, with merged topics followed and repeats dropped.
+func edgesUnder(settings mapping.Settings, change source.Change) []graph.Edge {
+	id := change.Document.ID
+	made := settings.Rules.Apply(id, id.Source(), change.References, change.Labels)
+
+	var want []graph.Edge
+	for _, edge := range slices.Concat(change.Edges, made.Edges) {
+		edge.To = settings.MergedInto(edge.To)
+		at := slices.IndexFunc(want, func(kept graph.Edge) bool { return kept.Triple() == edge.Triple() })
+		switch {
+		case edge.To == id:
+			// says nothing
+		case at < 0:
+			want = append(want, edge)
+		case want[at].Summary == "":
+			want[at] = edge
+		}
+	}
+	slices.SortFunc(want, graph.Edge.Compare)
+	return want
 }
 
 // outEdges returns every edge that starts at a vertex, sorted.

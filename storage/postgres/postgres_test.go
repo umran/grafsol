@@ -59,6 +59,22 @@ func TestNeighbors(t *testing.T) {
 	})
 }
 
+func TestRecord(t *testing.T) {
+	const pageSize = 3
+	storagetest.RunRecord(t, pageSize, func(t *testing.T) storage.Record {
+		store, _ := open(t)
+		store.PageSize = pageSize
+		return store
+	})
+}
+
+func TestSettings(t *testing.T) {
+	storagetest.RunSettings(t, func(t *testing.T) storage.Settings {
+		store, _ := open(t)
+		return store
+	})
+}
+
 // The generic scan must hold to the same contract when the Store beneath it
 // is a real one that hands out its edges in pages.
 func TestNeighborsByScan(t *testing.T) {
@@ -105,7 +121,7 @@ func TestNeighborsMatchTheScan(t *testing.T) {
 
 		switch {
 		case id.Kind() == graph.KindTopic:
-			edges = append(edges, graph.Edge{From: hub, Kind: graph.TaggedWith, To: id})
+			edges = append(edges, graph.Edge{From: hub, Kind: graph.InTopic, To: id})
 		case i%3 == 0:
 			edges = append(edges, graph.Edge{From: id, Kind: graph.ChildOf, To: hub, Summary: "sub-issue of"})
 		case i%3 == 1:
@@ -397,6 +413,13 @@ func TestSyncerConverges(t *testing.T) {
 			store, pool := open(t)
 			ingesttest.ConvergeWithoutLoss(t, store, postgres.NewLedger(pool), seed, sizes)
 		})
+		t.Run(fmt.Sprintf("as rules change/seed=%d", seed), func(t *testing.T) {
+			store, pool := open(t)
+			// Small pages, so that catching up with new settings lists the
+			// documents on record over many round trips while they change.
+			store.PageSize = 7
+			ingesttest.ConvergeAsRulesChange(t, store, postgres.NewLedger(pool), seed, sizes)
+		})
 	}
 }
 
@@ -428,7 +451,7 @@ func TestASearchGoesTheSameWayOnPostgresAsInMemory(t *testing.T) {
 		switch {
 		case from == to || from.Kind() == graph.KindTopic:
 		case to.Kind() == graph.KindTopic:
-			edges = append(edges, graph.Edge{From: from, Kind: graph.TaggedWith, To: to})
+			edges = append(edges, graph.Edge{From: from, Kind: graph.InTopic, To: to})
 		default:
 			edges = append(edges, graph.Edge{From: from, Kind: graph.LinksTo, To: to, Summary: "see also"})
 		}
@@ -639,7 +662,7 @@ func randomGraph(documents, edgesEach int) (edges []graph.Edge, vertices []graph
 			case 0:
 				edge.Kind = graph.ChildOf
 			case 1:
-				edge.Kind, edge.To = graph.TaggedWith, topics[random.IntN(len(topics))]
+				edge.Kind, edge.To = graph.InTopic, topics[random.IntN(len(topics))]
 			}
 			if !seen[edge] {
 				seen[edge] = true

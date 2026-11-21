@@ -68,8 +68,8 @@ func TestWalkFollowsOnlyTheRequestedEdges(t *testing.T) {
 		edge("child1", graph.ChildOf, doc("parent")),
 		edge("child2", graph.ChildOf, doc("parent")),
 		edge("child1", graph.LinksTo, doc("elsewhere")),
-		edge("child1", graph.TaggedWith, billing),
-		edge("other", graph.TaggedWith, billing),
+		edge("child1", graph.InTopic, billing),
+		edge("other", graph.InTopic, billing),
 	)
 
 	// Backwards along child_of: the children of a document.
@@ -84,11 +84,11 @@ func TestWalkFollowsOnlyTheRequestedEdges(t *testing.T) {
 	})
 	requireIDs(t, parents, doc("child1"), doc("parent"))
 
-	// Out to a topic and back in from it: the documents that share a tag.
-	sameTag := walk(t, store, []graph.ID{doc("child1")}, traverse.Options{
-		Follow: []traverse.Step{traverse.Out(graph.TaggedWith), traverse.In(graph.TaggedWith)},
+	// Out to a topic and back in from it: the documents that share a topic.
+	sameTopic := walk(t, store, []graph.ID{doc("child1")}, traverse.Options{
+		Follow: []traverse.Step{traverse.Out(graph.InTopic), traverse.In(graph.InTopic)},
 	})
-	requireIDs(t, sameTag, doc("child1"), billing, doc("other"))
+	requireIDs(t, sameTopic, doc("child1"), billing, doc("other"))
 
 	// An empty kind follows every kind.
 	everything := walk(t, store, []graph.ID{doc("child1")}, traverse.Options{

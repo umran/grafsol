@@ -19,15 +19,17 @@ type wiki struct{}
 
 func (wiki) Name() string { return "wiki" }
 
-// Resolve recognizes the wiki's own addresses, which is what turns a URL in
-// one page into an edge to another.
+// Resolve recognizes the wiki's own addresses, which is what lets an address
+// in one page become an edge to another.
 func (wiki) Resolve(url string) (graph.ID, bool) {
 	page, ours := strings.CutPrefix(url, "https://wiki.test/")
 	return graph.DocumentID("wiki", page), ours
 }
 
-// Scan lists every page as a change: the page as it now is, and every edge
-// that starts at it.
+// Scan lists every page as a change: the page as it now is, what it points
+// at, and the labels on it. What those become in the graph is for the
+// graph's rules to say; here the rules every source starts with make a
+// links_to edge of a mention and an in_topic edge of a label.
 func (wiki) Scan(context.Context, source.Checkpoint) iter.Seq2[source.Change, error] {
 	page := func(name, title string) source.Change {
 		return source.Change{
@@ -43,14 +45,14 @@ func (wiki) Scan(context.Context, source.Checkpoint) iter.Seq2[source.Change, er
 	}
 
 	refunds := page("refunds", "How refunds work")
-	refunds.LinkURL("https://wiki.test/payments", "Refunds reverse a payment; see the payments page.")
-	refunds.Tag("Billing", "Invoices, refunds and payment providers.")
+	refunds.MentionURL("https://wiki.test/payments", "Refunds reverse a payment; see the payments page.")
+	refunds.Label("Billing", "Invoices, refunds and payment providers.")
 
 	payments := page("payments", "Payment providers")
-	payments.Tag("Billing", "")
+	payments.Label("Billing", "")
 
 	onboarding := page("onboarding", "Your first week")
-	onboarding.Tag("Billing", "")
+	onboarding.Label("Billing", "")
 
 	return func(yield func(source.Change, error) bool) {
 		for _, change := range []source.Change{refunds, payments, onboarding} {
@@ -79,14 +81,14 @@ func Example() {
 	}
 	fmt.Printf("%d pages applied\n", report.Applied)
 
-	// From the refunds page, follow its links, and follow tags out to their
-	// topic and back in to the other pages that carry it.
+	// From the refunds page, follow its links, and follow its topic out and
+	// back in to the other pages that belong to it.
 	walk := traverse.Walk(ctx, traverse.FanOut{Store: store}, []graph.ID{"doc:wiki:refunds"}, traverse.Options{
 		MaxDepth: 2,
 		Follow: []traverse.Step{
 			traverse.Out(graph.LinksTo),
-			traverse.Out(graph.TaggedWith),
-			traverse.In(graph.TaggedWith),
+			traverse.Out(graph.InTopic),
+			traverse.In(graph.InTopic),
 		},
 	})
 	for visit, err := range walk {

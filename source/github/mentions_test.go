@@ -52,6 +52,25 @@ func TestReferences(t *testing.T) {
 	if got[7].context != "- #31, #32" {
 		t.Errorf("context = %q", got[7].context)
 	}
+
+	// Each reference is kept as it was written, which is what lets a rule
+	// find it in its line again.
+	var written []string
+	for _, reference := range got {
+		written = append(written, reference.written)
+		if !strings.Contains(reference.context, reference.written) {
+			t.Errorf("the reference written %q is not in its own line %q", reference.written, reference.context)
+		}
+	}
+	wantWritten := []string{
+		"#12", "acme/web#7",
+		"https://example.com/spec", "https://acme.atlassian.net/browse/PAY-7",
+		"https://github.com/acme/api/issues/9#issuecomment-123",
+		"#30", "#31", "#32",
+	}
+	if !slices.Equal(written, wantWritten) {
+		t.Errorf("the references were written\n  %q\nwant\n  %q", written, wantWritten)
+	}
 }
 
 func TestReferencesInAwkwardText(t *testing.T) {
@@ -62,9 +81,10 @@ func TestReferencesInAwkwardText(t *testing.T) {
 	if found := references("acme/api", "#12345678901234567890 and #0"); len(found) != 0 {
 		t.Errorf("implausible numbers yielded %v", found)
 	}
-	// Mentions of other repositories are lower-cased like every other ID.
+	// Mentions of other repositories are lower-cased like every other ID,
+	// and kept as they were written all the same.
 	found := references("acme/api", "see Acme/Web#3")
-	if len(found) != 1 || found[0].target != "doc:github:acme/web#3" {
+	if len(found) != 1 || found[0].target != "doc:github:acme/web#3" || found[0].written != "Acme/Web#3" {
 		t.Errorf("got %v", found)
 	}
 	// A very long line is cut to a readable length.

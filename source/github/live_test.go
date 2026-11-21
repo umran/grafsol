@@ -40,8 +40,8 @@ func TestLiveScan(t *testing.T) {
 		if document.URL == "" || document.Title == "" || document.CreatedAt.IsZero() || document.UpdatedAt.IsZero() || change.Version == 0 {
 			t.Errorf("%s came back with fields missing: %+v", document.ID, document)
 		}
-		t.Logf("%s  %-12s  %d edges, %d topics, %d links  %q",
-			document.ID, document.Type, len(change.Edges), len(change.Topics), len(change.Links), document.Title)
+		t.Logf("%s  %-12s  %d references, %d labels  %q",
+			document.ID, document.Type, len(change.References), len(change.Labels), document.Title)
 		if seen++; seen == 8 {
 			break
 		}

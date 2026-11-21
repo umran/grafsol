@@ -3,6 +3,10 @@
 -- CreateSchema runs this file as it stands, after replacing {{dimensions}}
 -- with the embedding length it was given. Every statement is idempotent, so
 -- running the file again changes nothing.
+--
+-- The file says what a database looks like today. A database made by an
+-- earlier version of grafsol gets here in steps, each run once: they are in
+-- upgrades.go, and the last table in this file remembers which have run.
 
 -- pgvector supplies the vector type, cosine distance and the HNSW index.
 -- Version 0.8 or later is needed.
@@ -62,6 +66,43 @@ create table if not exists edges (
 create index if not exists edges_in on edges (dst, kind, src);
 
 
+-- WHAT SOURCES SAID: one row per document, kept beside the graph.
+--
+-- vertices and edges hold what was made of a document: which kind of edge
+-- each of its references became, which topic each label filed it under.
+-- This table holds what that was made from: the document as its source and
+-- the summariser left it, the references and labels the source reported,
+-- and any edges it stated outright. With it, a change of rules can make the
+-- edges again without reading any source a second time.
+--
+-- body is JSON because it is only ever read and written whole, a document
+-- at a time. codec.go says what is in it.
+create table if not exists said (
+    document text collate "C" primary key,   -- 'doc:github:acme/api#42'
+    body     jsonb not null
+);
+
+
+-- THE SETTINGS: the one document that says how a team's graph is made (its
+-- kinds of edge, its rules, the topics it has merged), and how many times
+-- it has been saved.
+--
+-- The database does not read the document: package mapping does. A save
+-- names the version it was made from and goes through only if that is still
+-- the version here, so two people saving at once cannot undo each other.
+--
+-- The table has exactly one row, there from the start with an empty
+-- document at version 0. The primary key, on a column that can only be
+-- true, is what keeps it to one.
+create table if not exists settings (
+    only_row boolean primary key default true check (only_row),
+    version  bigint  not null,
+    document bytea   not null
+);
+
+insert into settings (version, document) values (0, '') on conflict do nothing;
+
+
 -- THE LEDGER: what the sync engine remembers, kept apart from the graph.
 
 -- The ledger's clock: a single row. Tick adds one to it, which the sync
@@ -95,4 +136,13 @@ create index if not exists ledger_marks_unseen
 create table if not exists ledger_checkpoints (
     name       text  primary key,
     checkpoint bytea not null
+);
+
+
+-- UPGRADES: which of the steps in upgrades.go have been run on this
+-- database. A step is run once, in the transaction that records it here.
+create table if not exists schema_upgrades (
+    upgrade    integer primary key,
+    name       text        not null,
+    applied_at timestamptz not null default now()
 );

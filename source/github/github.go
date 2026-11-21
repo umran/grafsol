@@ -14,14 +14,23 @@
 // position (its events API is delayed and incomplete), so a Source is not a
 // source.Subscriber.
 //
-// # What becomes what
+// # What is reported
 //
 //	issue or pull request #42 in acme/api   Document "doc:github:acme/api#42"
-//	each label                              Topic, and a TaggedWith edge to it
-//	the parent of a sub-issue               ChildOf edge
-//	"#12" or "acme/web#12" in the text      LinksTo edge
-//	any other URL in the text               a Link, for the sync engine to resolve
+//	each label                              a Label
+//	the parent of a sub-issue               a Reference of the form "parent"
+//	"#12" or "acme/web#12" in the text      a Reference of the form "mention", with its line
+//	an address in the text                  the same, with the document it names if GitHub's, and
+//	                                        otherwise the address for the sync engine to resolve
 //	title and body                          Content, for enrichers
+//
+// The connector says what an issue points at and stops there. What each
+// reference and label becomes in the graph is decided by rules: those in
+// mapping.Defaults("github") until a team writes its own. By those, a
+// mention after one of GitHub's closing words ("fixes #12") is a resolves
+// edge, one after "duplicate of" a duplicates edge, any other a links_to
+// edge, a parent a child_of edge, and a label an in_topic edge to a topic of
+// the label's name.
 //
 // A document's Version is its updated_at time. That orders the changes of
 // one issue, which is all a version is for; it is never used to decide what

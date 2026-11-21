@@ -64,14 +64,14 @@ var leadLevels = []string{
 
 // leadQuestion asks how much the vertex at the end of a lead helps. The
 // vertex travels inside the question, with a note of how it was found, so
-// that it is judged on its own.
-func leadQuestion(lead retrieval.Lead) typesafe.Question {
+// that it is judged on its own. phrase gives the words for a kind of edge.
+func leadQuestion(lead retrieval.Lead, phrase func(graph.EdgeKind) string) typesafe.Question {
 	instructions := map[string]any{
 		"question":  "How much does `candidate` help to answer `user_question`?",
 		"candidate": describe(lead.Target),
 	}
 	if !lead.Seed() {
-		found := map[string]string{"how": relation(lead)}
+		found := map[string]string{"how": relation(lead, phrase)}
 		if lead.Edge.Summary != "" {
 			found["note"] = lead.Edge.Summary
 		}
@@ -112,35 +112,28 @@ func describe(vertex graph.Vertex) map[string]string {
 
 // relation says, in words, how the vertex at the end of a lead is joined to
 // the vertex it was found at. "it" is the candidate.
-func relation(lead retrieval.Lead) string {
+//
+// phrase gives the words for the edge's kind, which read from the edge's
+// From to its To. So "resolves" makes "it resolves X" of an edge that leaves
+// the candidate and "X resolves it" of one that arrives; a topic that a
+// document arrives at is "this topic". A kind with no words is named by its
+// key.
+func relation(lead retrieval.Lead, phrase func(graph.EdgeKind) string) string {
 	other := nameOf(lead.From)
 	arrives := lead.Edge.To == lead.Target.VertexID() // the edge points at the candidate
-	switch lead.Edge.Kind {
-	case graph.LinksTo:
-		if arrives {
-			return other + " links to it"
-		}
-		return "it links to " + other
-	case graph.ChildOf:
-		if arrives {
-			return other + " is a part of it"
-		}
-		return "it is a part of " + other
-	case graph.InTopic:
-		if arrives {
-			return other + " belongs to this topic"
-		}
-		return "it belongs to " + other
-	case graph.TaggedWith:
-		if arrives {
-			return other + " is tagged with this topic"
-		}
-		return "it is tagged with " + other
-	}
-	if arrives {
+	words := phrase(lead.Edge.Kind)
+	_, atTopic := lead.Target.(*graph.Topic)
+	switch {
+	case words == "" && arrives:
 		return fmt.Sprintf("%s has a %q edge to it", other, lead.Edge.Kind)
+	case words == "":
+		return fmt.Sprintf("it has a %q edge to %s", lead.Edge.Kind, other)
+	case arrives && atTopic:
+		return other + " " + words + " this topic"
+	case arrives:
+		return other + " " + words + " it"
 	}
-	return fmt.Sprintf("it has a %q edge to %s", lead.Edge.Kind, other)
+	return "it " + words + " " + other
 }
 
 // nameOf returns what to call a vertex in a sentence.

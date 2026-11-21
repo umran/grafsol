@@ -1,11 +1,13 @@
 // Package postgres is the storage backend built on PostgreSQL with the
 // pgvector extension. It provides a storage.Store and
-// storage.DocumentSearcher (Store), a storage.Ledger (Ledger) and a faster
-// way to expand a traversal frontier (Store.Expand).
+// storage.DocumentSearcher (Store), which also keeps the storage.Record and
+// the storage.Settings that go with a graph, a storage.Ledger (Ledger) and
+// a faster way to expand a traversal frontier (Store.Expand).
 //
 // The whole design fits in two files worth reading first: schema.sql defines
 // the tables and indexes and says why each is the way it is, and queries.go
-// lists every SQL statement the package sends.
+// lists every SQL statement the package sends. upgrades.go holds the steps
+// that bring a database made by an earlier version up to this one.
 //
 // The caller owns the connection pool:
 //
@@ -39,12 +41,14 @@ var schemaSQL string
 const MaxEmbeddingDimensions = 2000
 
 // CreateSchema creates the tables and indexes in schema.sql if they do not
-// exist yet. embeddingDimensions is the length of the embeddings that will
-// be stored; it is fixed from then on, because a vector index can only
-// compare vectors of one length.
+// exist yet, and brings a database made by an earlier version of this
+// package up to date (see upgrades.go). embeddingDimensions is the length of
+// the embeddings that will be stored; it is fixed from then on, because a
+// vector index can only compare vectors of one length.
 //
 // Calling CreateSchema again is harmless, but calling it with a different
-// number of dimensions than the existing schema has is an error.
+// number of dimensions than the existing schema has is an error. So is
+// calling it on a database that a later version of this package has used.
 func CreateSchema(ctx context.Context, pool *pgxpool.Pool, embeddingDimensions int) error {
 	if embeddingDimensions < 1 || embeddingDimensions > MaxEmbeddingDimensions {
 		return fmt.Errorf("postgres: embeddings must have between 1 and %d dimensions, not %d", MaxEmbeddingDimensions, embeddingDimensions)
@@ -75,7 +79,7 @@ select atttypmod
 		if existing != embeddingDimensions {
 			return fmt.Errorf("the schema already exists with %d-dimensional embeddings, not %d", existing, embeddingDimensions)
 		}
-		return nil
+		return runUpgrades(ctx, tx)
 	})
 	if err != nil {
 		return fmt.Errorf("postgres: creating the schema: %w", err)
@@ -83,9 +87,14 @@ select atttypmod
 	return nil
 }
 
-// Store is a storage.Store and storage.DocumentSearcher kept in Postgres.
-// Its Expand method also makes it a traverse.Expander.
+// Store is a storage.Store and storage.DocumentSearcher kept in Postgres,
+// with the storage.Record and storage.Settings that go with the graph. Its
+// Expand method also makes it a traverse.Expander.
 type Store struct {
+	// PageSize is how many documents Recorded returns per page; zero means
+	// storage.DefaultPageSize. Edges takes its page size from each query.
+	PageSize int
+
 	pool *pgxpool.Pool
 }
 

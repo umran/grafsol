@@ -7,25 +7,28 @@ import (
 )
 
 // EdgeKind names the relationship an edge expresses. It reads as a verb
-// phrase from the edge's From vertex to its To vertex. The set is open: a
-// new source may introduce its own kinds alongside the well-known ones below.
+// phrase from the edge's From vertex to its To vertex.
+//
+// The set is open, and a team's to define: package mapping keeps the kinds a
+// graph has, with the words for each, and starts every graph off with a few
+// more than the three below. These three are named here because the module
+// itself relies on them: they are what a mention, a parent and a label
+// become when no rule says otherwise.
 type EdgeKind string
 
 const (
 	// LinksTo (document -> document): From references To, through a
-	// hyperlink or a mention such as "#42".
+	// hyperlink or a mention such as "#42", and nothing says more than that.
 	LinksTo EdgeKind = "links_to"
 
 	// ChildOf (document -> document): From sits under To in a hierarchy: a
 	// sub-page of a page, a sub-task of a ticket, an issue in an epic.
 	ChildOf EdgeKind = "child_of"
 
-	// InTopic (document -> topic): From belongs to the topic.
+	// InTopic (document -> topic): From belongs to the topic: it carries
+	// the topic's label, or was filed under it. It is the one kind that
+	// joins a document to a topic unless a team defines another.
 	InTopic EdgeKind = "in_topic"
-
-	// TaggedWith (document -> topic): From carries the topic as an explicit
-	// tag or label.
-	TaggedWith EdgeKind = "tagged_with"
 )
 
 // Validate reports what is wrong with the kind, or nil. A kind is a

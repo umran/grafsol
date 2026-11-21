@@ -470,9 +470,9 @@ func TestReceiveReadsAnIssueAfreshWhenItsPayloadNamesNoParent(t *testing.T) {
 	if changes[0].Document.Title != "a title that is already out of date" {
 		t.Errorf("a trusting Source did not use the payload: %+v", changes[0].Document)
 	}
-	for _, edge := range changes[0].Edges {
-		if edge.Kind == graph.ChildOf {
-			t.Errorf("an issue whose trusted payload names no parent got a child_of edge: %+v", edge)
+	for _, reference := range changes[0].References {
+		if reference.Form == graph.FormParent {
+			t.Errorf("an issue whose trusted payload names no parent was given one: %+v", reference)
 		}
 	}
 }
@@ -702,32 +702,32 @@ func requireSampleChange(t *testing.T, change source.Change) {
 
 	firstLine := "Refunds fail after 30s, see #12 and acme/web#3."
 	secondLine := "Tracked in https://acme.atlassian.net/browse/PAY-7 and discussed in https://github.com/acme/api/pull/40."
-	wantEdges := []graph.Edge{
-		{From: id, Kind: graph.TaggedWith, To: "topic:bug"},
-		{From: id, Kind: graph.TaggedWith, To: "topic:area/billing"},
-		{From: id, Kind: graph.ChildOf, To: "doc:github:acme/api#7", Summary: "sub-issue of"},
-		{From: id, Kind: graph.LinksTo, To: "doc:github:acme/api#12", Summary: firstLine},
-		{From: id, Kind: graph.LinksTo, To: "doc:github:acme/web#3", Summary: firstLine},
-		{From: id, Kind: graph.LinksTo, To: "doc:github:acme/api#40", Summary: secondLine}, // a GitHub link, resolved on the spot
+	// The connector reports what the issue points at, and how. It decides
+	// the kind of no edge, so it states none and describes no topic.
+	wantLabels := []graph.Label{
+		{Name: "Bug", Description: "Something is not working"},
+		{Name: "area/billing"},
 	}
-	if !slices.Equal(change.Edges, wantEdges) {
-		t.Errorf("the edges are\n  %+v\nwant\n  %+v", change.Edges, wantEdges)
+	if !slices.Equal(change.Labels, wantLabels) {
+		t.Errorf("the labels are %+v, want %+v", change.Labels, wantLabels)
 	}
 
-	wantTopics := []graph.Topic{
-		{ID: "topic:bug", Name: "Bug", Summary: "Something is not working"},
-		{ID: "topic:area/billing", Name: "area/billing"},
+	const jiraURL, pullURL = "https://acme.atlassian.net/browse/PAY-7", "https://github.com/acme/api/pull/40"
+	wantReferences := []graph.Reference{
+		{Target: "doc:github:acme/api#7", Form: graph.FormParent, Context: "sub-issue of"},
+		{Target: "doc:github:acme/api#12", Form: graph.FormMention, Written: "#12", Context: firstLine},
+		{Target: "doc:github:acme/web#3", Form: graph.FormMention, Written: "acme/web#3", Context: firstLine},
+		// The address in Jira is not GitHub's to recognize; it is passed on
+		// for the sync engine to place.
+		{URL: jiraURL, Form: graph.FormMention, Written: jiraURL, Context: secondLine},
+		// A GitHub address is resolved on the spot.
+		{Target: "doc:github:acme/api#40", Form: graph.FormMention, Written: pullURL, Context: secondLine},
 	}
-	if !slices.EqualFunc(change.Topics, wantTopics, func(a, b graph.Topic) bool {
-		return a.ID == b.ID && a.Name == b.Name && a.Summary == b.Summary
-	}) {
-		t.Errorf("the topics are %+v, want %+v", change.Topics, wantTopics)
+	if !slices.Equal(change.References, wantReferences) {
+		t.Errorf("the references are\n  %+v\nwant\n  %+v", change.References, wantReferences)
 	}
-
-	// The link into Jira is not GitHub's to recognize; it is passed on.
-	wantLinks := []source.Link{{URL: "https://acme.atlassian.net/browse/PAY-7", Context: secondLine}}
-	if !slices.Equal(change.Links, wantLinks) {
-		t.Errorf("the links are %+v, want %+v", change.Links, wantLinks)
+	if len(change.Edges) != 0 || len(change.Topics) != 0 {
+		t.Errorf("the connector stated %d edges and described %d topics, want none of either", len(change.Edges), len(change.Topics))
 	}
 }
 

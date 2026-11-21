@@ -18,6 +18,7 @@ import (
 	"github.com/umran/grafsol/graph"
 	"github.com/umran/grafsol/ingest"
 	"github.com/umran/grafsol/ingest/ingesttest"
+	"github.com/umran/grafsol/mapping"
 	"github.com/umran/grafsol/source"
 	"github.com/umran/grafsol/storage"
 	"github.com/umran/grafsol/storage/memory"
@@ -28,17 +29,21 @@ import (
 func TestApplyWritesTheDocumentItsEdgesAndItsTopics(t *testing.T) {
 	h := newHarness(t)
 
+	// The source says what the issue points at. The rules that ship for
+	// GitHub say what each of those is.
 	change := issue("42", 1)
-	change.LinkTo(doc("7"), "fixes the bug in #7")
-	change.ChildOf(doc("1"), "sub-issue of")
-	change.Tag("Bug", "Something is not working")
+	mention(&change, "7", "Fixes #7.")
+	mention(&change, "8", "The same cause as #8, perhaps.")
+	change.Parent(doc("1"), "sub-issue of")
+	change.Label("Bug", "Something is not working")
 	h.apply(change, ingest.Applied)
 
 	h.requireDocument(doc("42"), "issue 42 at version 1")
 	h.requireOutEdges(doc("42"),
 		graph.Edge{From: doc("42"), Kind: graph.ChildOf, To: doc("1"), Summary: "sub-issue of"},
-		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("7"), Summary: "fixes the bug in #7"},
-		graph.Edge{From: doc("42"), Kind: graph.TaggedWith, To: "topic:bug"},
+		graph.Edge{From: doc("42"), Kind: mapping.Resolves, To: doc("7"), Summary: "Fixes #7."},
+		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("8"), Summary: "The same cause as #8, perhaps."},
+		graph.Edge{From: doc("42"), Kind: graph.InTopic, To: "topic:bug"},
 	)
 	topic := h.vertex("topic:bug").(*graph.Topic)
 	if topic.Name != "Bug" || topic.Summary != "Something is not working" {
@@ -53,7 +58,7 @@ func TestApplyWritesTheDocumentItsEdgesAndItsTopics(t *testing.T) {
 func TestApplyingTheSameChangeAgainDoesNothing(t *testing.T) {
 	h := newHarness(t)
 	change := issue("42", 1)
-	change.LinkTo(doc("7"), "see #7")
+	mention(&change, "7", "see #7")
 
 	h.apply(change, ingest.Applied)
 	h.apply(change, ingest.Unchanged)
@@ -68,36 +73,59 @@ func TestApplyingTheSameChangeAgainDoesNothing(t *testing.T) {
 	}
 }
 
-// Whether a change needs applying is judged by fingerprint. Everything that
-// reaches the graph has to count towards it, the edges and topics as much as
-// the document's own fields.
+// Whether a change needs applying is judged by fingerprint. Everything a
+// source says that reaches the graph has to count towards it: what the
+// document points at and the labels on it as much as its own fields.
 func TestAnyDifferenceMakesAChange(t *testing.T) {
 	base := func() source.Change {
 		change := issue("42", 1)
-		change.LinkTo(doc("7"), "see #7")
+		mention(&change, "7", "see #7")
+		change.Label("bug", "Defects.")
+		change.Edges = []graph.Edge{{From: doc("42"), Kind: "supersedes", To: doc("3"), Summary: "stated outright"}}
 		return change
 	}
 	differences := map[string]func(c *source.Change){
-		"the title":            func(c *source.Change) { c.Document.Title = "renamed" },
-		"the content":          func(c *source.Change) { c.Content = "rewritten" },
-		"the URL":              func(c *source.Change) { c.Document.URL += "?moved" },
-		"an edge more":         func(c *source.Change) { c.LinkTo(doc("8"), "see #8") },
-		"an edge fewer":        func(c *source.Change) { c.Edges = nil },
-		"an edge's summary":    func(c *source.Change) { c.Edges[0].Summary = "fixes #7" },
-		"an edge's kind":       func(c *source.Change) { c.Edges[0].Kind = graph.ChildOf },
-		"a tag":                func(c *source.Change) { c.Tag("bug", "") },
-		"a link that resolves": func(c *source.Change) { c.LinkURL("https://github.test/acme/api/issues/7", "") },
+		"the title":                func(c *source.Change) { c.Document.Title = "renamed" },
+		"the content":              func(c *source.Change) { c.Content = "rewritten" },
+		"the URL":                  func(c *source.Change) { c.Document.URL += "?moved" },
+		"a mention more":           func(c *source.Change) { mention(c, "8", "see #8") },
+		"a mention fewer":          func(c *source.Change) { c.References = nil },
+		"the line a mention is on": func(c *source.Change) { c.References[0].Context = "fixes #7" },
+		"the form of a reference":  func(c *source.Change) { c.References[0].Form = graph.FormParent },
+		"whom a reference names":   func(c *source.Change) { c.References[0].Target = doc("9") },
+		"a parent":                 func(c *source.Change) { c.Parent(doc("1"), "sub-issue of") },
+		"a label more":             func(c *source.Change) { c.Label("urgent", "") },
+		"a label fewer":            func(c *source.Change) { c.Labels = nil },
+		"a label's description":    func(c *source.Change) { c.Labels[0].Description = "Defects in shipped behaviour." },
+		"a stated edge more": func(c *source.Change) {
+			c.Edges = append(c.Edges, graph.Edge{From: doc("42"), Kind: "supersedes", To: doc("4")})
+		},
+		"a stated edge fewer":      func(c *source.Change) { c.Edges = nil },
+		"a stated edge's summary":  func(c *source.Change) { c.Edges[0].Summary = "restated" },
+		"a stated edge's kind":     func(c *source.Change) { c.Edges[0].Kind = mapping.Blocks },
+		"an address that resolves": func(c *source.Change) { c.MentionURL("https://github.test/acme/api/issues/7", "") },
+		"an address nobody knows":  func(c *source.Change) { c.MentionURL("https://example.com/elsewhere", "see elsewhere") },
+		"an address to a new place": func(c *source.Change) {
+			c.MentionURL("https://github.test/acme/api/issues/7", "and https://github.test/acme/api/issues/7")
+		},
 	}
+	// Three of these say nothing new, and are the exceptions that prove the
+	// rule. An address that resolves to a document already mentioned, with
+	// no line of its own, adds nothing to that mention. Nor does one whose
+	// line would not be the one kept. An address that no source recognizes
+	// leads outside the graph, where nothing is made of it.
+	sayNothingNew := []string{"an address that resolves", "an address nobody knows", "an address to a new place"}
+
 	for name, alter := range differences {
 		h := newHarness(t)
 		h.apply(base(), ingest.Applied)
 
 		altered := base()
+		altered.References = slices.Clone(altered.References)
+		altered.Labels = slices.Clone(altered.Labels)
 		altered.Edges = slices.Clone(altered.Edges)
 		alter(&altered)
-		if name == "a link that resolves" {
-			// Resolves to the edge the document already has, so this one
-			// is the exception that proves the rule: nothing changed.
+		if slices.Contains(sayNothingNew, name) {
 			h.apply(altered, ingest.Unchanged)
 			continue
 		}
@@ -116,25 +144,27 @@ func TestApplyReplacesTheDocumentsEdges(t *testing.T) {
 
 	// Another document links to #42; that edge is its own and must survive.
 	other := issue("9", 1)
-	other.LinkTo(doc("42"), "depends on #42")
+	mention(&other, "42", "depends on #42")
 	h.apply(other, ingest.Applied)
 
 	first := issue("42", 1)
-	first.LinkTo(doc("7"), "see #7")
-	first.LinkTo(doc("8"), "see #8")
-	first.Tag("bug", "")
+	mention(&first, "7", "see #7")
+	mention(&first, "8", "see #8")
+	first.Label("bug", "")
 	h.apply(first, ingest.Applied)
 
-	// The next version drops the link to #8 and the tag, rewords the link
-	// to #7 and gains a link to #10.
+	// The next version drops the mention of #8 and the label, says more of
+	// #7 than it did, and mentions #10.
 	second := issue("42", 2)
-	second.LinkTo(doc("7"), "really fixes #7")
-	second.LinkTo(doc("10"), "see #10")
+	mention(&second, "7", "really fixes #7")
+	mention(&second, "10", "see #10")
 	h.apply(second, ingest.Applied)
 
+	// "fixes #7" is one of GitHub's closing words: the edge to #7 is not
+	// only reworded, it is of another kind, and the old one is gone.
 	h.requireOutEdges(doc("42"),
 		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("10"), Summary: "see #10"},
-		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("7"), Summary: "really fixes #7"},
+		graph.Edge{From: doc("42"), Kind: mapping.Resolves, To: doc("7"), Summary: "really fixes #7"},
 	)
 	h.requireOutEdges(doc("9"),
 		graph.Edge{From: doc("9"), Kind: graph.LinksTo, To: doc("42"), Summary: "depends on #42"},
@@ -145,15 +175,26 @@ func TestApplyTidiesWhatSourcesReport(t *testing.T) {
 	h := newHarness(t)
 
 	change := issue("42", 1)
-	change.LinkTo(doc("42"), "mentions itself")         // says nothing
-	change.LinkTo(doc("7"), "")                         // mentioned twice:
-	change.LinkTo(doc("7"), "the mention with context") // the one with a summary is kept
-	change.Edges = append(change.Edges, graph.Edge{From: doc("42"), Kind: graph.InTopic, To: "topic:undescribed"})
+	mention(&change, "42", "#42 mentions itself")            // says nothing
+	change.Mention(doc("7"), "", "")                         // mentioned twice:
+	change.Mention(doc("7"), "", "the mention with context") // the one with a line is kept
+	change.Edges = append(change.Edges,
+		graph.Edge{From: doc("42"), Kind: graph.InTopic, To: "topic:undescribed"},
+		graph.Edge{From: doc("42"), Kind: "supersedes", To: doc("42"), Summary: "itself, stated outright"}, // says nothing either
+		graph.Edge{From: doc("42"), Kind: "supersedes", To: doc("3")},                                      // stated twice:
+		graph.Edge{From: doc("42"), Kind: "supersedes", To: doc("3"), Summary: "the one with a summary"},
+		// Stated outright, with no summary, and mentioned as well: one edge,
+		// which takes the mention's line.
+		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("9")},
+	)
+	mention(&change, "9", "see #9")
 	h.apply(change, ingest.Applied)
 
 	h.requireOutEdges(doc("42"),
 		graph.Edge{From: doc("42"), Kind: graph.InTopic, To: "topic:undescribed"},
 		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("7"), Summary: "the mention with context"},
+		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("9"), Summary: "see #9"},
+		graph.Edge{From: doc("42"), Kind: "supersedes", To: doc("3"), Summary: "the one with a summary"},
 	)
 	// A topic that was pointed at without being described still gets created.
 	if topic := h.vertex("topic:undescribed").(*graph.Topic); topic.Name != "undescribed" {
@@ -165,11 +206,11 @@ func TestApplyIgnoresChangesThatArriveLate(t *testing.T) {
 	h := newHarness(t)
 
 	newer := issue("42", 5)
-	newer.LinkTo(doc("7"), "see #7")
+	mention(&newer, "7", "see #7")
 	h.apply(newer, ingest.Applied)
 
 	older := issue("42", 3)
-	older.LinkTo(doc("8"), "see #8")
+	mention(&older, "8", "see #8")
 	h.apply(older, ingest.Stale)
 
 	h.requireDocument(doc("42"), "issue 42 at version 5")
@@ -180,11 +221,11 @@ func TestRemovalLeavesATombstone(t *testing.T) {
 	h := newHarness(t)
 
 	other := issue("9", 1)
-	other.LinkTo(doc("42"), "depends on #42")
+	mention(&other, "42", "depends on #42")
 	h.apply(other, ingest.Applied)
 
 	change := issue("42", 5)
-	change.LinkTo(doc("7"), "see #7")
+	mention(&change, "7", "see #7")
 	h.apply(change, ingest.Applied)
 
 	h.apply(removal("42", 6), ingest.Removed)
@@ -192,6 +233,9 @@ func TestRemovalLeavesATombstone(t *testing.T) {
 		t.Errorf("the document is still in the graph after its removal")
 	}
 	h.requireOutEdges(doc("42"))
+	if said := h.said(doc("42")); len(said) != 0 {
+		t.Errorf("what the source said of the document is still on record after its removal: %+v", said)
+	}
 	// What other documents say about it is theirs to say.
 	h.requireOutEdges(doc("9"), graph.Edge{From: doc("9"), Kind: graph.LinksTo, To: doc("42"), Summary: "depends on #42"})
 
@@ -227,16 +271,41 @@ func TestLinksResolveAcrossSources(t *testing.T) {
 	}}
 	h := newHarness(t, jira)
 
+	const jiraURL, outsideURL, githubURL = "https://acme.atlassian.net/browse/PAY-7", "https://example.com/nothing-we-track", "https://github.test/acme/api/issues/7"
 	change := issue("42", 1)
-	change.LinkURL("https://acme.atlassian.net/browse/PAY-7", "implements PAY-7")
-	change.LinkURL("https://example.com/nothing-we-track", "an outside link")
-	change.LinkURL("https://github.test/acme/api/issues/7", "relates to #7") // the harness's own source knows this one
+	change.MentionURL(jiraURL, "implements PAY-7")
+	change.MentionURL(outsideURL, "an outside link")
+	change.MentionURL(githubURL, "relates to #7") // the harness's own source knows this one
+	// A connector that names the document itself has the last word, whatever
+	// the address beside it would resolve to.
+	named := graph.Reference{Target: doc("9"), URL: githubURL, Form: graph.FormMention, Written: githubURL, Context: "placed by its connector"}
+	change.References = append(change.References, named)
 	h.apply(change, ingest.Applied)
 
 	h.requireOutEdges(doc("42"),
 		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("7"), Summary: "relates to #7"},
+		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: doc("9"), Summary: "placed by its connector"},
 		graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: "doc:jira:PAY-7", Summary: "implements PAY-7"},
 	)
+	// The change that was handed in is the caller's, and is not written to.
+	for _, reference := range change.References[:3] {
+		if reference.Target != "" {
+			t.Errorf("applying the change filled in the caller's own copy of it: %+v", reference)
+		}
+	}
+
+	// The record keeps every address, with the document each was found to
+	// name. The one nobody recognized is there too, naming nothing: should
+	// a source for it be added one day, there is something to resolve.
+	want := []graph.Reference{
+		{Target: "doc:jira:PAY-7", URL: jiraURL, Form: graph.FormMention, Written: jiraURL, Context: "implements PAY-7"},
+		{URL: outsideURL, Form: graph.FormMention, Written: outsideURL, Context: "an outside link"},
+		{Target: doc("7"), URL: githubURL, Form: graph.FormMention, Written: githubURL, Context: "relates to #7"},
+		named,
+	}
+	if got := h.said(doc("42"))[doc("42")].References; !slices.Equal(got, want) {
+		t.Errorf("the references on record are\n  %+v\nwant\n  %+v", got, want)
+	}
 }
 
 func TestSourcesNeverOverwriteAnExistingTopic(t *testing.T) {
@@ -249,7 +318,7 @@ func TestSourcesNeverOverwriteAnExistingTopic(t *testing.T) {
 	}
 
 	change := issue("42", 1)
-	change.Tag("bug", "") // the source knows only the name
+	change.Label("bug", "") // the source knows only the name
 	h.apply(change, ingest.Applied)
 
 	topic := h.vertex("topic:bug").(*graph.Topic)
@@ -264,7 +333,7 @@ func TestEnrichersFillInAndExtendAChange(t *testing.T) {
 		c.Document.Summary = "summary of: " + c.Content
 		c.Document.Embedding = []float32{0.5, 0.25}
 		c.EmbeddingSpace = "acme/by-hand@1; 2 dimensions"
-		c.InTopic("Payments", "Money in, money out.")
+		c.Label("Payments", "Money in, money out.")
 		return nil
 	}
 
@@ -283,7 +352,7 @@ func TestAFailedEnricherLeavesNothingBehind(t *testing.T) {
 	h.enrich = func(*source.Change) error { return broken }
 
 	change := issue("42", 1)
-	change.LinkTo(doc("7"), "see #7")
+	mention(&change, "7", "see #7")
 	if _, err := h.syncer.Apply(t.Context(), change); !errors.Is(err, broken) {
 		t.Fatalf("Apply returned %v, want the enricher's error", err)
 	}
@@ -291,6 +360,9 @@ func TestAFailedEnricherLeavesNothingBehind(t *testing.T) {
 		t.Errorf("a document was stored although enriching it failed")
 	}
 	h.requireOutEdges(doc("42"))
+	if said := h.said(doc("42")); len(said) != 0 {
+		t.Errorf("something was put on record although enriching the document failed: %+v", said)
+	}
 
 	// Once the enricher works again, the same change goes through.
 	h.enrich = nil
@@ -323,8 +395,13 @@ func TestApplyRejectsInvalidChanges(t *testing.T) {
 		"a malformed edge": func(c *source.Change) {
 			c.Edges = append(c.Edges, graph.Edge{From: c.Document.ID, Kind: "Not A Kind", To: doc("8")})
 		},
-		"a malformed topic":  func(c *source.Change) { c.Topics = append(c.Topics, graph.Topic{ID: "nope"}) },
-		"a link with no URL": func(c *source.Change) { c.LinkURL("", "nowhere") },
+		"a malformed topic":      func(c *source.Change) { c.Topics = append(c.Topics, graph.Topic{ID: "nope"}) },
+		"a reference to nothing": func(c *source.Change) { c.MentionURL("", "nowhere") },
+		"a reference of no form": func(c *source.Change) {
+			c.References = append(c.References, graph.Reference{Target: doc("8")})
+		},
+		"a reference to a malformed ID": func(c *source.Change) { c.Mention("8", "#8", "see #8") },
+		"a label with no name":          func(c *source.Change) { c.Label("", "nameless") },
 	}
 	for name, spoil := range bad {
 		change := valid
@@ -349,8 +426,8 @@ func TestConcurrentChangesToOneDocument(t *testing.T) {
 	for v := range changes {
 		change := issue("42", uint64(v+1))
 		for target := range 5 {
-			// Each version links to its own five documents.
-			change.LinkTo(doc(fmt.Sprintf("v%d-t%d", v+1, target)), fmt.Sprintf("version %d", v+1))
+			// Each version mentions its own five documents.
+			change.Mention(doc(fmt.Sprintf("v%d-t%d", v+1, target)), "", fmt.Sprintf("version %d", v+1))
 		}
 		changes[v] = change
 	}
@@ -367,7 +444,14 @@ func TestConcurrentChangesToOneDocument(t *testing.T) {
 
 	newest := changes[versions-1]
 	h.requireDocument(doc("42"), newest.Document.Title)
-	h.requireOutEdges(doc("42"), newest.Edges...)
+	var want []graph.Edge
+	for _, reference := range newest.References {
+		want = append(want, graph.Edge{From: doc("42"), Kind: graph.LinksTo, To: reference.Target, Summary: reference.Context})
+	}
+	h.requireOutEdges(doc("42"), want...)
+	if got := h.said(doc("42"))[doc("42")].References; !slices.Equal(got, newest.References) {
+		t.Errorf("the record holds the references of another version: %+v", got)
+	}
 }
 
 // --- Follow, Deliver, Handler -------------------------------------------------
@@ -481,7 +565,7 @@ func TestReconcileFillsTheGraphAndThenHasNothingToDo(t *testing.T) {
 	scanner := &fakeSource{name: "github"}
 	for n := range 5 {
 		change := issue(fmt.Sprint(n+1), 1)
-		change.LinkTo(doc(fmt.Sprint((n+1)%5+1)), "next")
+		change.Mention(doc(fmt.Sprint((n+1)%5+1)), "", "next")
 		scanner.docs = append(scanner.docs, change)
 	}
 
@@ -692,6 +776,17 @@ func TestTheGraphConvergesOnTheSource(t *testing.T) {
 	}
 }
 
+// The rules change while documents are being applied, and the graph must end
+// as the rules that were saved last make it.
+func TestTheGraphConvergesWhileItsRulesChange(t *testing.T) {
+	for seed := range uint64(25) {
+		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
+			t.Parallel()
+			ingesttest.ConvergeAsRulesChange(t, memory.New(), memory.NewLedger(), seed, ingesttest.Options{})
+		})
+	}
+}
+
 func TestTheFeedAloneSufficesWhenNothingIsLost(t *testing.T) {
 	for seed := range uint64(25) {
 		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
@@ -781,6 +876,16 @@ func (h *harness) requireDocument(id graph.ID, title string) {
 	}
 }
 
+// said returns what is on record for the documents among ids.
+func (h *harness) said(ids ...graph.ID) map[graph.ID]storage.Said {
+	h.t.Helper()
+	found, err := h.store.Said(h.t.Context(), ids)
+	if err != nil {
+		h.t.Fatalf("Said: %v", err)
+	}
+	return found
+}
+
 // requireOutEdges fails the test unless the vertex has exactly these
 // outgoing edges, in any order.
 func (h *harness) requireOutEdges(id graph.ID, want ...graph.Edge) {
@@ -799,6 +904,12 @@ func (h *harness) requireOutEdges(id graph.ID, want ...graph.Edge) {
 // doc returns the ID of a pretend GitHub issue.
 func doc(number string) graph.ID {
 	return graph.DocumentID("github", "acme/api#"+number)
+}
+
+// mention records, in a change, that a line of the document's text mentions
+// another pretend GitHub issue as "#<number>".
+func mention(c *source.Change, number, line string) {
+	c.Mention(doc(number), "#"+number, line)
 }
 
 // issue returns a change describing a pretend GitHub issue at some version.

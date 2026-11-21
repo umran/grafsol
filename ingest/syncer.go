@@ -12,6 +12,19 @@
 // All three end in Apply, which turns one change into graph writes. apply.go
 // is the file to read to understand the package.
 //
+// # What a source says, and what is made of it
+//
+// A change does not carry edges, as a rule. It carries what the document's
+// source said: the things the document points at, and the labels on it.
+// What each of those becomes is decided by the graph's settings (package
+// mapping), which a team can change. So Apply does two things with a change.
+// It puts what was said on record (storage.Record), and it has a Composer
+// make the document's edges from that record and the settings as they stand.
+//
+// When the settings change, nothing needs to be read from any source again:
+// Composer.CatchUp makes every document's edges anew from what is on record.
+// compose.go is the file to read for that half of the package.
+//
 // # What a Syncer guarantees
 //
 // Changes may be lost, repeated, reordered or handled by several workers at
@@ -60,11 +73,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/umran/grafsol/model"
 	"github.com/umran/grafsol/source"
 	"github.com/umran/grafsol/storage"
 )
 
-// Config says what a Syncer works with.
+// Config says what a Syncer works with. A Composer is made from one too, and
+// uses the parts of it that have to do with storage and the Embedder.
 type Config struct {
 	// Store is the graph to keep in step. Required.
 	Store storage.Store
@@ -74,6 +89,14 @@ type Config struct {
 	// Ledger; the Ledger is what coordinates them.
 	Ledger storage.Ledger
 
+	// Record is where what each source said is written down, and Settings
+	// is where a team's kinds, rules and merged topics are kept. Both go
+	// with the graph, and a Store from this module keeps them itself: left
+	// nil, each is taken from Store. They need setting only for a Store
+	// that keeps neither.
+	Record   storage.Record
+	Settings storage.Settings
+
 	// Sources are asked to recognize the URLs found in documents, so that
 	// a link from one system into another becomes an edge. List every
 	// source whose documents may be linked to.
@@ -82,6 +105,12 @@ type Config struct {
 	// Enrichers run, in order, on every change that alters a document.
 	// Summarize and Embed are the two that come with the package.
 	Enrichers []Enricher
+
+	// Embedder embeds a topic the first time the graph's rules file a
+	// document under it. Left nil, the embedder given to Embed is used, if
+	// Embed is among the Enrichers; with neither, such topics are created
+	// without embeddings.
+	Embedder model.Embedder
 
 	// Logger hears about two things that would otherwise pass unseen: a
 	// pushed delivery that could not be applied (the sender is only told
@@ -95,32 +124,72 @@ type Config struct {
 type Syncer struct {
 	store     storage.Store
 	ledger    storage.Ledger
+	record    storage.Record
+	composer  *Composer
 	sources   []source.Source
 	enrichers []Enricher
 	logger    *slog.Logger
 }
 
-// NewSyncer returns a Syncer. It panics if cfg has no Store or no Ledger: a
-// Syncer can do nothing without them, and leaving one out is a mistake in
-// the program rather than a condition to handle while it runs.
+// NewSyncer returns a Syncer. It panics if cfg has no Store or no Ledger, or
+// names no Record or Settings while its Store keeps none: a Syncer can do
+// nothing without them, and leaving one out is a mistake in the program
+// rather than a condition to handle while it runs.
 func NewSyncer(cfg Config) *Syncer {
-	if cfg.Store == nil {
-		panic("ingest: NewSyncer needs a Store")
-	}
-	if cfg.Ledger == nil {
-		panic("ingest: NewSyncer needs a Ledger")
-	}
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	cfg = cfg.complete("NewSyncer")
 	return &Syncer{
 		store:     cfg.Store,
 		ledger:    cfg.Ledger,
+		record:    cfg.Record,
+		composer:  NewComposer(cfg),
 		sources:   cfg.Sources,
 		enrichers: cfg.Enrichers,
-		logger:    logger,
+		logger:    cfg.Logger,
 	}
+}
+
+// complete returns the configuration with everything that was left to
+// default filled in. It panics, in the name of the constructor that called
+// it, if something that cannot be defaulted is missing.
+func (cfg Config) complete(constructor string) Config {
+	if cfg.Store == nil {
+		panic("ingest: " + constructor + " needs a Store")
+	}
+	if cfg.Ledger == nil {
+		panic("ingest: " + constructor + " needs a Ledger")
+	}
+	if cfg.Record == nil {
+		record, keepsOne := cfg.Store.(storage.Record)
+		if !keepsOne {
+			panic("ingest: " + constructor + " needs a Record: its Store does not keep one")
+		}
+		cfg.Record = record
+	}
+	if cfg.Settings == nil {
+		settings, keepsThem := cfg.Store.(storage.Settings)
+		if !keepsThem {
+			panic("ingest: " + constructor + " needs Settings: its Store does not keep them")
+		}
+		cfg.Settings = settings
+	}
+	if cfg.Embedder == nil {
+		for _, enricher := range cfg.Enrichers {
+			if embed, isEmbed := enricher.(embedEnricher); isEmbed {
+				cfg.Embedder = embed.embedder
+			}
+		}
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	return cfg
+}
+
+// Composer returns the Composer that the Syncer makes each document's edges
+// with. Call its CatchUp as a program starts, to bring a graph up to
+// settings that have changed since it last ran.
+func (s *Syncer) Composer() *Composer {
+	return s.composer
 }
 
 // Outcome says what became of a change.

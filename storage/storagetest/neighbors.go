@@ -53,7 +53,7 @@ func testNeighborsNearestFirst(t *testing.T, store storage.Store, searcher stora
 
 	toSame := graph.Edge{From: hub, Kind: graph.LinksTo, To: same.ID, Summary: "see the same"}
 	fromDiagonal := graph.Edge{From: diagonal.ID, Kind: graph.LinksTo, To: hub, Summary: "the diagonal mentions the hub"}
-	toOrthogonal := graph.Edge{From: hub, Kind: graph.TaggedWith, To: orthogonal.ID}
+	toOrthogonal := graph.Edge{From: hub, Kind: "supersedes", To: orthogonal.ID}
 	fromOpposite := graph.Edge{From: opposite.ID, Kind: graph.ChildOf, To: hub, Summary: "sub-issue of"}
 	putEdges(t, store, fromOpposite, toOrthogonal, fromDiagonal, toSame)
 

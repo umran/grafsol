@@ -125,13 +125,13 @@ func TestAnAgentCanFindAndUseTheGatherTool(t *testing.T) {
 func TestTheTraceIsReturnedWhenAskedFor(t *testing.T) {
 	slow := &graph.Document{ID: "doc:s:slow", Title: "Checkout is slow"}
 	hub := &graph.Topic{ID: "topic:performance", Name: "performance"}
-	tagged := graph.Edge{From: slow.ID, Kind: graph.TaggedWith, To: hub.ID}
+	filed := graph.Edge{From: slow.ID, Kind: graph.InTopic, To: hub.ID}
 	engine := &scriptedEngine{results: []retrieval.Result{{Findings: &retrieval.Findings{
 		Verdict: retrieval.Stopped,
 		Reason:  "the limit of 2 steps was reached",
 		Trace: []retrieval.Step{
 			{Judged: []retrieval.Judgment{{Lead: retrieval.Lead{Target: slow, Estimate: 1}, Potential: 0.5}}, Followed: []graph.ID{slow.ID}},
-			{Judged: []retrieval.Judgment{{Lead: retrieval.Lead{Target: hub, Edge: tagged, From: slow, Estimate: 0.25}, Potential: 0.1}}},
+			{Judged: []retrieval.Judgment{{Lead: retrieval.Lead{Target: hub, Edge: filed, From: slow, Estimate: 0.25}, Potential: 0.1}}},
 		},
 		Left: retrieval.Left{Unjudged: 3, Unread: 1},
 	}}}}
@@ -156,7 +156,7 @@ func TestTheTraceIsReturnedWhenAskedFor(t *testing.T) {
 			 "followed": ["doc:s:slow"]},
 			{"sufficient": 0,
 			 "judged": [{"id": "topic:performance", "title": "performance", "estimate": 0.25, "potential": 0.1,
-			             "via": {"from": "doc:s:slow", "kind": "tagged_with", "to": "topic:performance"}}],
+			             "via": {"from": "doc:s:slow", "kind": "in_topic", "to": "topic:performance"}}],
 			 "followed": []}
 		]
 	}]}`)

@@ -33,7 +33,7 @@ func TestAnAnswerTwoHopsAwayIsFoundWithThePathToIt(t *testing.T) {
 	w.edge(slow, graph.LinksTo, notes, "investigated in the notes")
 	w.edge(notes, graph.LinksTo, cause, "root cause")
 	w.edge(slow, graph.LinksTo, other, "")
-	w.edge(slow, graph.TaggedWith, billing, "")
+	w.edge(slow, graph.InTopic, billing, "")
 
 	// The first two documents are about the question without answering it;
 	// only the third states the answer.
@@ -384,7 +384,7 @@ func TestNoVertexIsJudgedOrVisitedTwice(t *testing.T) {
 		w.edge(id, graph.LinksTo, docs[(i+1)%count], "next")
 		w.edge(id, graph.LinksTo, docs[(i+2)%count], "next but one")
 		w.edge(id, graph.ChildOf, docs[0], "back to the start")
-		w.edge(id, graph.TaggedWith, shared, "")
+		w.edge(id, graph.InTopic, shared, "")
 	}
 
 	judge := &scriptedJudge{rate: func(retrieval.Lead) float64 { return 0.9 }}
@@ -552,7 +552,7 @@ func TestAnUnsatisfiedSearchReachesEverythingATraversalDoes(t *testing.T) {
 				}
 				kind := graph.LinksTo
 				if to.Kind() == graph.KindTopic {
-					kind = graph.TaggedWith
+					kind = graph.InTopic
 				}
 				w.edge(from, kind, to, "")
 			}
